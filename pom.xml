@@ -70,6 +70,16 @@
             <artifactId>guava</artifactId>
             <version>31.0.1-jre</version>
         </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>3.18.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java-util</artifactId>
+            <version>3.18.0</version>
+        </dependency>
 
 
     </dependencies>
