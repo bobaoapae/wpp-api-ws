@@ -11,8 +11,7 @@ public class InitRequest {
         this.clientId = clientId;
     }
 
-    @Override
-    public String toString() {
+    public String toJson() {
         var dataInit = new Object[]{
                 "admin",
                 "init",

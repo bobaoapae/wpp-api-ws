@@ -1,5 +1,7 @@
 package br.com.zapia.wpp.api.ws;
 
+import br.com.zapia.wpp.api.ws.model.AuthInfo;
+
 import java.awt.image.BufferedImage;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -18,7 +20,8 @@ public class WhatsAppClientBuilder {
     private Function<Callable, Callable> callableFactory;
     private Function<Runnable, Thread> threadFactory;
     private Consumer<String> onQrCode;
-    private String clientId;
+    private Consumer<AuthInfo> onAuthInfo;
+    private AuthInfo authInfo;
 
     public WhatsAppClientBuilder() {
         this.runnableFactory = runnable -> () -> runnable.run();
@@ -53,8 +56,8 @@ public class WhatsAppClientBuilder {
         return this;
     }
 
-    public WhatsAppClientBuilder clientId(String clientId) {
-        this.clientId = clientId;
+    public WhatsAppClientBuilder authInfo(AuthInfo authInfo) {
+        this.authInfo = authInfo;
         return this;
     }
 
@@ -63,7 +66,12 @@ public class WhatsAppClientBuilder {
         return this;
     }
 
+    public WhatsAppClientBuilder onAuthInfo(Consumer<AuthInfo> onAuthInfo) {
+        this.onAuthInfo = onAuthInfo;
+        return this;
+    }
+
     public WhatsAppClient builder() {
-        return new WhatsAppClient(clientId, onQrCode, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
+        return new WhatsAppClient(authInfo, onQrCode, onAuthInfo, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
     }
 }

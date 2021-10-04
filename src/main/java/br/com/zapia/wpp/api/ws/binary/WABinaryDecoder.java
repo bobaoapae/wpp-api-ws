@@ -255,13 +255,7 @@ public class WABinaryDecoder {
         var jsonArray = new JsonArray();
         jsonArray.add(descr);
         jsonArray.add(JsonParser.parseString(JsonUtil.I.getGson().toJson(attrs)));
-        if (jsonElement != null) {
-            if (jsonElement.isJsonArray()) {
-                jsonArray.addAll(jsonElement.getAsJsonArray());
-            } else {
-                jsonArray.add(jsonElement);
-            }
-        }
+        jsonArray.add(jsonElement);
 
         return jsonArray;
     }
