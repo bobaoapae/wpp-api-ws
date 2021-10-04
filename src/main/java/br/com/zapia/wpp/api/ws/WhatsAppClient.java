@@ -16,6 +16,7 @@ import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.qrcode.QRCodeWriter;
 import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
 import org.whispersystems.curve25519.Curve25519;
 import org.whispersystems.curve25519.Curve25519KeyPair;
@@ -28,6 +29,8 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -63,6 +66,8 @@ public class WhatsAppClient extends WebSocketClient {
     private String pushName;
     private String wid;
 
+    private LocalDateTime lastSeen;
+
     public WhatsAppClient(String clientId, Consumer<String> onQrCode, Function<Runnable, Runnable> runnableFactory, Function<Callable, Callable> callableFactory, Function<Runnable, Thread> threadFactory, ExecutorService executorService, ScheduledExecutorService scheduledExecutorService) {
         super(URI.create(Constants.WS_URL));
         this.clientId = clientId;
@@ -92,6 +97,7 @@ public class WhatsAppClient extends WebSocketClient {
     }
 
     private void initLogin() {
+        startKeepAlive();
         sendInit().thenAccept(initResponse -> {
             if (initResponse.getStatus() == 200) {
                 serverId = initResponse.getRef();
@@ -182,7 +188,6 @@ public class WhatsAppClient extends WebSocketClient {
 
     private void handleWsMessage(String msgTag, String msgContent, boolean isBinary) {
         try {
-
             JsonElement jsonElement = null;
 
             if (isBinary) {
@@ -264,8 +269,21 @@ public class WhatsAppClient extends WebSocketClient {
             case "Props":
                 break;
             default:
-                logger.log(Level.WARNING, "Received unexpected tag: {" + jsonArray.get(0).getAsString() + "} with content: {" + jsonArray+ "}");
+                logger.log(Level.WARNING, "Received unexpected tag: {" + jsonArray.get(0).getAsString() + "} with content: {" + jsonArray + "}");
         }
+    }
+
+    private void startKeepAlive() {
+        scheduledExecutorService.scheduleAtFixedRate(() -> {
+            if (lastSeen == null) lastSeen = LocalDateTime.now();
+
+            var currentTime = LocalDateTime.now();
+            if (lastSeen.plusSeconds(25).isBefore(currentTime)) {
+                close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to timeout on receive pong from server  ");
+            } else {
+                send("?,,");
+            }
+        }, 0, Constants.KEEP_ALIVE_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -294,10 +312,15 @@ public class WhatsAppClient extends WebSocketClient {
 
     @Override
     public void onMessage(String message) {
-        var msgSplit = message.split(",", 2);
-        var msgTag = msgSplit[0];
-        var msgContent = msgSplit[1];
-        handleWsMessage(msgTag, msgContent, false);
+        if (message.charAt(0) == '!') {
+            var timestamp = Long.parseLong(message.substring(1));
+            lastSeen = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), TimeZone.getDefault().toZoneId());
+        } else {
+            var msgSplit = message.split(",", 2);
+            var msgTag = msgSplit[0];
+            var msgContent = msgSplit[1];
+            handleWsMessage(msgTag, msgContent, false);
+        }
     }
 
     @Override
