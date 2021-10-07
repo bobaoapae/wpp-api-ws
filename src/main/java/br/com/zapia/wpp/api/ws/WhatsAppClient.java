@@ -1,31 +1,33 @@
 package br.com.zapia.wpp.api.ws;
 
 import at.favre.lib.crypto.HKDF;
+import br.com.zapia.wpp.api.ws.binary.BinaryConstants;
+import br.com.zapia.wpp.api.ws.binary.WABinaryEncoder;
 import br.com.zapia.wpp.api.ws.model.*;
+import br.com.zapia.wpp.api.ws.model.communication.*;
+import br.com.zapia.wpp.api.ws.utils.EncryptionUtil;
 import br.com.zapia.wpp.api.ws.utils.JsonUtil;
 import br.com.zapia.wpp.api.ws.binary.WABinaryDecoder;
 import com.google.common.hash.Hashing;
 import com.google.common.primitives.Bytes;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.zxing.BarcodeFormat;
-import com.google.zxing.WriterException;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.qrcode.QRCodeWriter;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
 import org.whispersystems.curve25519.Curve25519;
-import org.whispersystems.curve25519.Curve25519KeyPair;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -48,29 +50,37 @@ public class WhatsAppClient extends WebSocketClient {
     private final ScheduledExecutorService scheduledExecutorService;
 
     private final Consumer<String> onQrCode;
+    private final Runnable onConnect;
     private final Consumer<AuthInfo> onAuthInfo;
 
-    private final Map<UUID, CompletableFuture<JsonElement>> wsEvents;
+    private final Map<Class<? extends BaseCollection<? extends BaseCollectionItem>>, BaseCollection<? extends BaseCollectionItem>> collections;
+    private final List<ScheduledFuture<?>> scheduledFutures;
+    private final Map<String, CompletableFuture<JsonElement>> wsEvents;
 
     private String serverId;
     private AuthInfo authInfo;
     private CommunicationKeys communicationKeys;
 
+    private int msgCount;
     private LocalDateTime lastSeen;
-    private ScheduledFuture refreshQrCodeScheduler;
+    private ScheduledFuture<?> refreshQrCodeScheduler;
+    private ScheduledFuture<?> keepAliveScheduled;
 
-    public WhatsAppClient(AuthInfo authInfo, Consumer<String> onQrCode, Consumer<AuthInfo> onAuthInfo, Function<Runnable, Runnable> runnableFactory, Function<Callable, Callable> callableFactory, Function<Runnable, Thread> threadFactory, ExecutorService executorService, ScheduledExecutorService scheduledExecutorService) {
+    public WhatsAppClient(AuthInfo authInfo, Consumer<String> onQrCode, Runnable onConnect, Consumer<AuthInfo> onAuthInfo, Function<Runnable, Runnable> runnableFactory, Function<Callable, Callable> callableFactory, Function<Runnable, Thread> threadFactory, ExecutorService executorService, ScheduledExecutorService scheduledExecutorService) {
         super(URI.create(Constants.WS_URL));
         this.authInfo = authInfo;
         this.onQrCode = onQrCode;
+        this.onConnect = onConnect;
         this.onAuthInfo = onAuthInfo;
         this.runnableFactory = runnableFactory;
         this.callableFactory = callableFactory;
         this.threadFactory = threadFactory;
         this.executorService = executorService;
         this.scheduledExecutorService = scheduledExecutorService;
-
         this.wsEvents = new ConcurrentHashMap<>();
+        this.scheduledFutures = new ArrayList<>();
+        this.collections = new HashMap<>();
+        setConnectionLostTimeout(0);
         getHeadersConnectWs().forEach(this::addHeader);
     }
 
@@ -80,24 +90,69 @@ public class WhatsAppClient extends WebSocketClient {
         return headers;
     }
 
+    public String generateMessageTag(boolean longTag) {
+        var seconds = System.currentTimeMillis() / 1000L;
+        var tag = (longTag ? seconds : (seconds % 1000)) + ".--" + msgCount;
+        msgCount++;
+        return tag;
+    }
+
     public <T> CompletableFuture<T> sendJson(String data, Class<T> responseType) {
-        UUID uuid = UUID.randomUUID();
+        var msgTag = generateMessageTag(false);
         var response = new CompletableFuture<JsonElement>();
-        wsEvents.put(uuid, response);
-        send(uuid + "," + data);
+        wsEvents.put(msgTag, response);
+        send(msgTag + "," + data);
         return response.thenApply(jsonElement -> JsonUtil.I.getGson().fromJson(jsonElement, responseType));
     }
 
-    /*public <T> CompletableFuture<T> sendBinary(BaseQuery baseQuery, Class<T> responseType) {
-        UUID uuid = UUID.randomUUID();
-        var response = new CompletableFuture<String>();
-        wsEvents.put(uuid, response);
-        send(uuid + "," + data);
-        return response.thenApply(s -> JsonUtil.I.getGson().fromJson(s, responseType));
-    }*/
+    public <T> CompletableFuture<T> sendBinary(JsonArray jsonArray, BinaryConstants.WA.WATags waTags, Class<T> responseType) {
+        var response = new CompletableFuture<JsonElement>();
+        try {
+            var msgTag = generateMessageTag(false);
+
+            var binary = new WABinaryEncoder().write(jsonArray);
+
+            var encryptedBinary = EncryptionUtil.encryptWa(communicationKeys.getEncKey(), binary);
+
+            var hmac = Hashing.hmacSha256(communicationKeys.getMacKey())
+                    .newHasher()
+                    .putBytes(encryptedBinary)
+                    .hash().asBytes();
+
+            var buffSend = Bytes.concat(
+                    (msgTag + ",").getBytes(StandardCharsets.UTF_8),
+                    waTags.toByteArray(),
+                    hmac,
+                    encryptedBinary
+            );
+
+            wsEvents.put(msgTag, response);
+            send(buffSend);
+            return response.thenApply(s -> JsonUtil.I.getGson().fromJson(s, responseType));
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "SendBinary", e);
+            response.completeExceptionally(e);
+            return response.thenApply(jsonElement -> null);
+        }
+    }
+
+    private void createCollections() {
+        collections.clear();
+        collections.put(ChatCollection.class, new ChatCollection(this));
+        collections.put(ContactCollection.class, new ContactCollection(this));
+    }
+
+    public <T extends BaseCollection<? extends BaseCollectionItem>> T getCollection(Class<T> collectionType) {
+        var collection = collections.get(collectionType);
+        if (collection != null)
+            return collectionType.cast(collection);
+
+        return null;
+    }
 
     private void initLogin() {
         try {
+            createCollections();
             if (authInfo == null) {
                 byte[] bytes = new byte[16];
                 SecureRandom.getInstanceStrong().nextBytes(bytes);
@@ -109,7 +164,7 @@ public class WhatsAppClient extends WebSocketClient {
             sendInit().thenAccept(initResponse -> {
                 if (initResponse.getStatus() == 200) {
                     serverId = initResponse.getRef();
-                    refreshQrCodeScheduler = scheduledExecutorService.scheduleWithFixedDelay(() -> {
+                    refreshQrCodeScheduler = schedule(() -> {
                         refreshQrCode().thenAccept(refreshQrResponse -> {
                             if (refreshQrResponse.getStatus() != 200) {
                                 close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to many QR refresh");
@@ -142,12 +197,19 @@ public class WhatsAppClient extends WebSocketClient {
         return sendJson(new InitRequest(authInfo.getClientId()).toJson(), InitResponse.class);
     }
 
-    private CompletableFuture<LoginResponse> sendLogin() {
-        return sendJson(new LoginRequest(authInfo).toJson(), LoginResponse.class);
+    private void initNewSession() {
+        try {
+            var keyPair = CURVE_25519.generateKeyPair();
+            authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
+            authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
+            generateQrCode();
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "InitNewSession", e);
+        }
     }
 
-    private CompletableFuture<RefreshQrResponse> refreshQrCode() {
-        return sendJson(new RefreshQrRequest().toJson(), RefreshQrResponse.class);
+    private CompletableFuture<LoginResponse> sendLogin() {
+        return sendJson(new LoginRequest(authInfo).toJson(), LoginResponse.class);
     }
 
     private void generateQrCode() {
@@ -167,14 +229,22 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
-    private void initNewSession() {
+    private CompletableFuture<RefreshQrResponse> refreshQrCode() {
+        return sendJson(new RefreshQrRequest().toJson(), RefreshQrResponse.class);
+    }
+
+    //See WhatsApp Web {openStream} function
+    private void syncCollections() {
         try {
-            var keyPair = CURVE_25519.generateKeyPair();
-            authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
-            authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
-            generateQrCode();
+            getCollection(ChatCollection.class).sync();
+            getCollection(ContactCollection.class).sync();
+            //sendBinary(new BaseQuery("contacts", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryContact, BinaryConstants.WA.WAFlag.ignore), null);
+            sendBinary(new BaseQuery("status", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryStatus, BinaryConstants.WA.WAFlag.ignore), null);
+            if (authInfo.isBusiness()) {
+                sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), null);
+            }
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "InitNewSession", e);
+            logger.log(Level.SEVERE, "SyncCollections", e);
         }
     }
 
@@ -225,6 +295,11 @@ public class WhatsAppClient extends WebSocketClient {
             communicationKeys = new CommunicationKeys(sharedKey, expandedKey, keysEncrypted, keysDecrypted, encKey, macKey);
 
             executorService.submit(runnableFactory.apply(() -> {
+                syncCollections();
+                onConnect.run();
+            }));
+
+            executorService.submit(runnableFactory.apply(() -> {
                 onAuthInfo.accept(authInfo);
             }));
 
@@ -234,7 +309,7 @@ public class WhatsAppClient extends WebSocketClient {
     }
 
     private void startKeepAlive() {
-        scheduledExecutorService.scheduleAtFixedRate(() -> {
+        keepAliveScheduled = schedule(() -> {
             if (lastSeen == null) lastSeen = LocalDateTime.now();
 
             var currentTime = LocalDateTime.now();
@@ -244,6 +319,18 @@ public class WhatsAppClient extends WebSocketClient {
                 send("?,,");
             }
         }, 0, Constants.KEEP_ALIVE_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private ScheduledFuture<?> schedule(Runnable runnable, long initialDelay, long delay, TimeUnit timeUnit) {
+        synchronized (scheduledFutures) {
+            var scheduledFuture = scheduledExecutorService.scheduleAtFixedRate(runnable, initialDelay, delay, timeUnit);
+            scheduledFutures.add(scheduledFuture);
+            return scheduledFuture;
+        }
+    }
+
+    public int getMsgCount() {
+        return msgCount;
     }
 
     @Override
@@ -284,32 +371,44 @@ public class WhatsAppClient extends WebSocketClient {
                     throw new Exception("HMAC Validation Failed");
                 }
 
-                SecretKeySpec secretKey = new SecretKeySpec(communicationKeys.getEncKey(), "AES");
-                byte[] iv = Arrays.copyOf(data, 16);
-                Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
-                cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
-                var decryptedBytes = Bytes.concat(cipher.update(Arrays.copyOfRange(data, 16, data.length)), cipher.doFinal());
+                var decryptedBytes = EncryptionUtil.decryptWa(communicationKeys.getEncKey(), data);
 
                 var binaryDecoder = new WABinaryDecoder(decryptedBytes);
                 var jsonDecoded = binaryDecoder.read();
-                var binaryType = jsonDecoded.get(0).getAsString();
-                switch (binaryType) {
-                    case "response": {
-                        var responseType = jsonDecoded.get(1).getAsJsonObject().get("type").getAsString();
-                        switch (responseType) {
-                            case "chat": {
-                                var chats = jsonDecoded.get(2).getAsJsonArray();
-                                for (int i = 0; i < chats.size(); i++) {
-                                    var chat = chats.get(i).getAsJsonArray().get(1).getAsJsonObject();
-                                }
+
+                //TODO: wsEvents
+                if (wsEvents.containsKey(msgTag)) {
+                    var response = wsEvents.remove(msgTag);
+                    response.complete(jsonDecoded);
+                } else {
+                    var binaryType = jsonDecoded.get(0).getAsString();
+                    switch (binaryType) {
+                        case "response": {
+                            var duplicate = jsonDecoded.get(1).getAsJsonObject().get("duplicate");
+                            var responseType = jsonDecoded.get(1).getAsJsonObject().get("type").getAsString();
+                            if (duplicate != null && duplicate.getAsBoolean()) {
+                                logger.log(Level.INFO, "Received duplicated response: " + responseType);
+                                return;
                             }
-                            default:
-                                logger.log(Level.WARNING, "Unexpected Binary Response Type: " + responseType);
+                            switch (responseType) {
+                                case "chat": {
+                                    var chats = jsonDecoded.get(2).getAsJsonArray();
+                                    var chatsList = new ArrayList<ChatCollectionItem>();
+                                    for (int i = 0; i < chats.size(); i++) {
+                                        chatsList.add(new ChatCollectionItem().buildFromJson(chats.get(i).getAsJsonArray().get(1).getAsJsonObject()));
+                                    }
+                                    var chatCollection = getCollection(ChatCollection.class);
+                                    chatCollection.receiveSyncData(chatsList);
+                                    break;
+                                }
+                                default:
+                                    logger.log(Level.WARNING, "Unexpected Binary Response Type: " + responseType);
+                            }
+                            break;
                         }
-                        break;
+                        default:
+                            logger.log(Level.WARNING, "Unexpected Binary Type: " + binaryType);
                     }
-                    default:
-                        logger.log(Level.WARNING, "Unexpected Binary Type: " + binaryType);
                 }
             }
         } catch (Exception e) {
@@ -329,14 +428,9 @@ public class WhatsAppClient extends WebSocketClient {
                 var msgContent = msgSplit[1];
                 var jsonElement = JsonParser.parseString(msgContent);
 
-                UUID uuid = null;
-                try {
-                    uuid = UUID.fromString(msgTag);
-                } catch (Exception ignore) {
 
-                }
-                if (uuid != null && wsEvents.containsKey(uuid)) {
-                    var response = wsEvents.remove(uuid);
+                if (wsEvents.containsKey(msgTag)) {
+                    var response = wsEvents.remove(msgTag);
                     response.complete(jsonElement);
                 } else if (jsonElement.isJsonArray()) {
                     var jsonArray = jsonElement.getAsJsonArray();
@@ -355,6 +449,7 @@ public class WhatsAppClient extends WebSocketClient {
                             }
                             authInfo.setPushName(connResponse.getPushname());
                             authInfo.setWid(connResponse.getWid());
+                            authInfo.setBusiness(connResponse.getPlatform().contains("smb"));
                             generateCommunicationKeys();
                             break;
                         case "Stream":
@@ -374,6 +469,13 @@ public class WhatsAppClient extends WebSocketClient {
     @Override
     public void onClose(int code, String reason, boolean remote) {
         logger.log(Level.WARNING, "Ws Disconnected with code: {" + code + "} and reason: {" + reason + "}");
+        synchronized (scheduledFutures) {
+            for (var scheduledFuture : scheduledFutures) {
+                if (!scheduledFuture.isCancelled())
+                    scheduledFuture.cancel(true);
+            }
+            scheduledFutures.clear();
+        }
     }
 
     @Override

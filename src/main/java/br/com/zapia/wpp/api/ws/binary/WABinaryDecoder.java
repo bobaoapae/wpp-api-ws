@@ -15,7 +15,6 @@ public class WABinaryDecoder {
 
     private final byte[] data;
     private int index;
-    private String readData;
 
     public WABinaryDecoder(byte[] data) {
         this.data = data;
@@ -262,12 +261,5 @@ public class WABinaryDecoder {
 
     public JsonArray read() throws InvalidProtocolBufferException {
         return readNode();
-    }
-
-    @Override
-    public String toString() {
-        return "WABinaryDecoder{" +
-                "data=" + Arrays.toString(data) +
-                '}';
     }
 }

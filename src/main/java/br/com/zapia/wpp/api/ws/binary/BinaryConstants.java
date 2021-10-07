@@ -219,6 +219,86 @@ public class BinaryConstants {
             }
         }
 
+        public static class WATags {
+            private final WAMetric waMetric;
+            private final WAFlag waFlag;
+
+            public WATags(WAMetric waMetric, WAFlag waFlag) {
+                this.waMetric = waMetric;
+                this.waFlag = waFlag;
+            }
+
+            public byte[] toByteArray() {
+                return new byte[]{(byte) waMetric.getNumVal(), (byte) waFlag.getNumVal()};
+            }
+        }
+
+        public enum WAMetric {
+            debugLog(1),
+            queryResume(2),
+            liveLocation(3),
+            queryMedia(4),
+            queryChat(5),
+            queryContact(6),
+            queryMessages(7),
+            presence(8),
+            presenceSubscribe(9),
+            group(10),
+            read(11),
+            chat(12),
+            received(13),
+            picture(14),
+            status(15),
+            message(16),
+            queryActions(17),
+            block(18),
+            queryGroup(19),
+            queryPreview(20),
+            queryEmoji(21),
+            queryRead(22),
+            queryVCard(29),
+            queryStatus(30),
+            queryStatusUpdate(31),
+            queryLiveLocation(33),
+            queryLabel(36),
+            queryQuickReply(39);
+            private final int numVal;
+
+            WAMetric(int numVal) {
+                this.numVal = numVal;
+            }
+
+            public int getNumVal() {
+                return numVal;
+            }
+
+            public static WAMetric Convert(int numVal) {
+                var tag = Arrays.stream(WAMetric.values()).filter(tags -> tags.numVal == numVal).findFirst();
+                return tag.orElseThrow();
+            }
+        }
+
+        public enum WAFlag {
+            available(160),
+            other(136),
+            ignore(1 << 7),
+            acknowledge(1 << 6),
+            unavailable(1 << 3),
+            composing(1 << 2),
+            recording(1 << 2),
+            paused(1 << 2);
+
+            private final int numVal;
+
+            WAFlag(int numVal) {
+                this.numVal = numVal;
+            }
+
+            public int getNumVal() {
+                return numVal;
+            }
+        }
+
     }
 
 }

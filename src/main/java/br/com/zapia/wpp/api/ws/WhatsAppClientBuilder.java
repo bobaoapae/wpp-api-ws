@@ -21,6 +21,7 @@ public class WhatsAppClientBuilder {
     private Function<Runnable, Thread> threadFactory;
     private Consumer<String> onQrCode;
     private Consumer<AuthInfo> onAuthInfo;
+    private Runnable onConnect;
     private AuthInfo authInfo;
 
     public WhatsAppClientBuilder() {
@@ -31,47 +32,52 @@ public class WhatsAppClientBuilder {
         this.scheduledExecutorService = Executors.newScheduledThreadPool(20, r -> threadFactory.apply(r));
     }
 
-    public WhatsAppClientBuilder runnableFactory(Function<Runnable, Runnable> runnableFactory) {
+    public WhatsAppClientBuilder withRunnableFactory(Function<Runnable, Runnable> runnableFactory) {
         this.runnableFactory = runnableFactory;
         return this;
     }
 
-    public WhatsAppClientBuilder callableFactory(Function<Callable, Callable> callableFactory) {
+    public WhatsAppClientBuilder withCallableFactory(Function<Callable, Callable> callableFactory) {
         this.callableFactory = callableFactory;
         return this;
     }
 
-    public WhatsAppClientBuilder threadFactory(Function<Runnable, Thread> threadFactory) {
+    public WhatsAppClientBuilder withThreadFactory(Function<Runnable, Thread> threadFactory) {
         this.threadFactory = threadFactory;
         return this;
     }
 
-    public WhatsAppClientBuilder executorService(ExecutorService executorService) {
+    public WhatsAppClientBuilder withExecutorService(ExecutorService executorService) {
         this.executorService = executorService;
         return this;
     }
 
-    public WhatsAppClientBuilder scheduledExecutorService(ScheduledExecutorService scheduledExecutorService) {
+    public WhatsAppClientBuilder withScheduledExecutorService(ScheduledExecutorService scheduledExecutorService) {
         this.scheduledExecutorService = scheduledExecutorService;
         return this;
     }
 
-    public WhatsAppClientBuilder authInfo(AuthInfo authInfo) {
+    public WhatsAppClientBuilder withAuthInfo(AuthInfo authInfo) {
         this.authInfo = authInfo;
         return this;
     }
 
-    public WhatsAppClientBuilder onQrCode(Consumer<String> onQrCode) {
+    public WhatsAppClientBuilder withOnQrCode(Consumer<String> onQrCode) {
         this.onQrCode = onQrCode;
         return this;
     }
 
-    public WhatsAppClientBuilder onAuthInfo(Consumer<AuthInfo> onAuthInfo) {
+    public WhatsAppClientBuilder withOnAuthInfo(Consumer<AuthInfo> onAuthInfo) {
         this.onAuthInfo = onAuthInfo;
         return this;
     }
 
+    public WhatsAppClientBuilder withOnConnect(Runnable onConnect) {
+        this.onConnect = onConnect;
+        return this;
+    }
+
     public WhatsAppClient builder() {
-        return new WhatsAppClient(authInfo, onQrCode, onAuthInfo, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
+        return new WhatsAppClient(authInfo, onQrCode, onConnect, onAuthInfo, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
     }
 }

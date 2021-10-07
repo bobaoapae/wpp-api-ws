@@ -1,4 +1,4 @@
-package br.com.zapia.wpp.api.ws.model;
+package br.com.zapia.wpp.api.ws.model.communication;
 
 public class ConnResponse {
 
@@ -7,6 +7,7 @@ public class ConnResponse {
     private String browserToken;
     private String clientToken;
     private boolean connected;
+    private String platform;
     private String pushname;
     private String ref;
     private String secret;
@@ -51,5 +52,9 @@ public class ConnResponse {
 
     public String getSecret() {
         return secret;
+    }
+
+    public String getPlatform() {
+        return platform;
     }
 }

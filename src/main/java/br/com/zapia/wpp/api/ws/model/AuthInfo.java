@@ -11,6 +11,7 @@ public class AuthInfo {
     private String wid;
     private String privateKey;
     private String publicKey;
+    private boolean isBusiness;
 
     public String getClientId() {
         return clientId;
@@ -82,5 +83,13 @@ public class AuthInfo {
 
     public void setPublicKey(String publicKey) {
         this.publicKey = publicKey;
+    }
+
+    public boolean isBusiness() {
+        return isBusiness;
+    }
+
+    public void setBusiness(boolean business) {
+        isBusiness = business;
     }
 }

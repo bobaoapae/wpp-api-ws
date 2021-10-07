@@ -1,4 +1,4 @@
-package br.com.zapia.wpp.api.ws.model;
+package br.com.zapia.wpp.api.ws.model.communication;
 
 public class InitResponse {
 

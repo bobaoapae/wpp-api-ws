@@ -1,16 +1,14 @@
 package br.com.zapia.wpp.api.ws;
 
 import br.com.zapia.wpp.api.ws.model.AuthInfo;
+import br.com.zapia.wpp.api.ws.utils.JsonUtil;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.*;
 
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -19,23 +17,31 @@ import static org.junit.jupiter.api.Assertions.*;
 class WhatsAppClientTest {
 
     private WhatsAppClient whatsAppClient;
-    private String clientId;
     private CompletableFuture<AuthInfo> onAuthInfo;
     private AuthInfo authInfo;
+
+    @Order(0)
+    @Test
+    public void testJson(){
+        var bytes = new byte[100];
+        var json = JsonParser.parseString(JsonUtil.I.getGson().toJson(bytes));
+        var byteArray = JsonUtil.I.getGson().fromJson(json, byte[].class);
+        System.out.println("a");
+    }
 
     @Order(1)
     @Test
     public void createClient() {
         onAuthInfo = new CompletableFuture<>();
-        whatsAppClient = new WhatsAppClientBuilder().onQrCode(s -> {
+        whatsAppClient = new WhatsAppClientBuilder().withOnQrCode(s -> {
             System.out.println(s);
-        }).onAuthInfo(authInfo1 -> {
+        }).withOnAuthInfo(authInfo1 -> {
             onAuthInfo.complete(authInfo1);
         }).builder();
         whatsAppClient.connect();
     }
 
-    @Order(2)
+    /*@Order(2)
     @Test
     public void waitForAuthInfo() throws ExecutionException, InterruptedException, TimeoutException {
         authInfo = onAuthInfo.get(30, TimeUnit.SECONDS);
@@ -52,9 +58,9 @@ class WhatsAppClientTest {
     @Test
     public void createClientWithAuthInfo() {
         onAuthInfo = new CompletableFuture<>();
-        whatsAppClient = new WhatsAppClientBuilder().authInfo(authInfo).onQrCode(s -> {
+        whatsAppClient = new WhatsAppClientBuilder().withAuthInfo(authInfo).withOnQrCode(s -> {
             System.out.println(s);
-        }).onAuthInfo(authInfo1 -> {
+        }).withOnAuthInfo(authInfo1 -> {
             onAuthInfo.complete(authInfo1);
         }).builder();
         whatsAppClient.connect();
@@ -65,7 +71,7 @@ class WhatsAppClientTest {
     public void waitForAuthInfo2() throws ExecutionException, InterruptedException, TimeoutException {
         authInfo = onAuthInfo.get(10, TimeUnit.SECONDS);
         assertNotNull(authInfo);
-    }
+    }*/
 
     @Order(99)
     @Test
