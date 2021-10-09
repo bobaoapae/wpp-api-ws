@@ -1,9 +1,9 @@
 package br.com.zapia.wpp.api.ws.model.communication;
 
 import br.com.zapia.wpp.api.ws.Constants;
-import br.com.zapia.wpp.api.ws.utils.JsonUtil;
+import br.com.zapia.wpp.api.ws.utils.Util;
 
-public class InitRequest {
+public class InitRequest implements IWARequest {
 
     private final String clientId;
 
@@ -11,6 +11,7 @@ public class InitRequest {
         this.clientId = clientId;
     }
 
+    @Override
     public String toJson() {
         var dataInit = new Object[]{
                 "admin",
@@ -20,6 +21,6 @@ public class InitRequest {
                 clientId,
                 true
         };
-        return JsonUtil.I.getGson().toJson(dataInit);
+        return Util.GSON.toJson(dataInit);
     }
 }

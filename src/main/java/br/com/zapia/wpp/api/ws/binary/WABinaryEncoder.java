@@ -1,6 +1,6 @@
 package br.com.zapia.wpp.api.ws.binary;
 
-import br.com.zapia.wpp.api.ws.utils.JsonUtil;
+import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -141,7 +141,7 @@ public class WABinaryEncoder {
             if (jsonArray.size() > 0) {
                 var firstElement = jsonArray.get(0);
                 if (firstElement.isJsonPrimitive()) {
-                    var byteArray = JsonUtil.I.getGson().fromJson(jsonArray, byte[].class);
+                    var byteArray = Util.GSON.fromJson(jsonArray, byte[].class);
                     writeByteLength(byteArray.length);
                     pushBytes(byteArray);
                 } else if (firstElement.isJsonArray()) {
@@ -167,10 +167,10 @@ public class WABinaryEncoder {
 
     private void writeNode(JsonArray jsonArray) {
         if (jsonArray.size() != 3) {
-            throw new IllegalArgumentException("Invalid node give: " + JsonUtil.I.getGson().toJson(jsonArray));
+            throw new IllegalArgumentException("Invalid node give: " + Util.GSON.toJson(jsonArray));
         }
 
-        var validAttributes = getValidKeys(jsonArray.get(1).getAsJsonObject());
+        var validAttributes = getValidKeys(jsonArray.get(1) == null || jsonArray.get(1).isJsonNull() ? new JsonObject() : jsonArray.get(1).getAsJsonObject());
 
         var optional = 0;
         if (jsonArray.get(2) != null & !jsonArray.get(2).isJsonNull()) {

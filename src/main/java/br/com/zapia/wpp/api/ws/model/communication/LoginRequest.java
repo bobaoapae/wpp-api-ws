@@ -1,10 +1,9 @@
 package br.com.zapia.wpp.api.ws.model.communication;
 
-import br.com.zapia.wpp.api.ws.Constants;
 import br.com.zapia.wpp.api.ws.model.AuthInfo;
-import br.com.zapia.wpp.api.ws.utils.JsonUtil;
+import br.com.zapia.wpp.api.ws.utils.Util;
 
-public class LoginRequest {
+public class LoginRequest implements IWARequest {
 
     private final AuthInfo authInfo;
 
@@ -12,7 +11,8 @@ public class LoginRequest {
         this.authInfo = authInfo;
     }
 
-    public String toJson(){
+    @Override
+    public String toJson() {
         var dataInit = new Object[]{
                 "admin",
                 "login",
@@ -21,7 +21,7 @@ public class LoginRequest {
                 authInfo.getClientId(),
                 "takeover"
         };
-        return JsonUtil.I.getGson().toJson(dataInit);
+        return Util.GSON.toJson(dataInit);
     }
 
 }

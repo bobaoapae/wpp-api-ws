@@ -1,15 +1,18 @@
 package br.com.zapia.wpp.api.ws.binary;
 
-import br.com.zapia.wpp.api.ws.Constants;
-import br.com.zapia.wpp.api.ws.binary.protos.Message;
 import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
-import br.com.zapia.wpp.api.ws.utils.JsonUtil;
-import com.google.gson.*;
+import br.com.zapia.wpp.api.ws.utils.Util;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
 
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 public class WABinaryDecoder {
 
@@ -253,7 +256,7 @@ public class WABinaryDecoder {
 
         var jsonArray = new JsonArray();
         jsonArray.add(descr);
-        jsonArray.add(JsonParser.parseString(JsonUtil.I.getGson().toJson(attrs)));
+        jsonArray.add(JsonParser.parseString(Util.GSON.toJson(attrs)));
         jsonArray.add(jsonElement);
 
         return jsonArray;

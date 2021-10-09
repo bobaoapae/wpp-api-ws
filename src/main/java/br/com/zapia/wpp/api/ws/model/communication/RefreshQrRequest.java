@@ -1,16 +1,17 @@
 package br.com.zapia.wpp.api.ws.model.communication;
 
-import br.com.zapia.wpp.api.ws.utils.JsonUtil;
+import br.com.zapia.wpp.api.ws.utils.Util;
 
-public class RefreshQrRequest {
+public class RefreshQrRequest implements IWARequest {
 
-    public String toJson(){
-        var dataInit = new Object[]{
+    @Override
+    public String toJson() {
+        var data = new Object[]{
                 "admin",
                 "Conn",
                 "reref"
         };
-        return JsonUtil.I.getGson().toJson(dataInit);
+        return Util.GSON.toJson(data);
     }
 
 }
