@@ -1,12 +1,11 @@
 package br.com.zapia.wpp.api.ws;
 
-import br.com.zapia.wpp.api.ws.model.AuthInfo;
-import br.com.zapia.wpp.api.ws.model.ChatCollectionItem;
-import br.com.zapia.wpp.api.ws.model.MessageSend;
+import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.*;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +23,8 @@ class WhatsAppClientTest {
     private CompletableFuture<Void> onConnect;
     private AuthInfo authInfo;
     private ChatCollectionItem chatCollectionItem;
+    private CompletableFuture<MessageCollectionItem> eventAddMsg;
+    private CompletableFuture<MessageCollectionItem> eventUpdateMsg;
 
     @Order(0)
     @Test
@@ -60,6 +61,20 @@ class WhatsAppClientTest {
     @Test
     public void waitForConnect() throws ExecutionException, InterruptedException, TimeoutException {
         onConnect.get(30, TimeUnit.SECONDS);
+        eventAddMsg = new CompletableFuture<>();
+        eventUpdateMsg = new CompletableFuture<>();
+        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.ADD, new ConsumerEventCancellable<>() {
+            @Override
+            public void accept(List<MessageCollectionItem> messageCollectionItems) {
+                eventAddMsg.complete(messageCollectionItems.get(0));
+            }
+        });
+        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.CHANGE, new ConsumerEventCancellable<>() {
+            @Override
+            public void accept(List<MessageCollectionItem> messageCollectionItems) {
+                eventUpdateMsg.complete(messageCollectionItems.get(0));
+            }
+        });
     }
 
     @Order(4)
@@ -79,7 +94,7 @@ class WhatsAppClientTest {
     @Order(6)
     @Test
     public void loadMessages() throws ExecutionException, InterruptedException, TimeoutException {
-        var messages = chatCollectionItem.getMessageCollection().loadMessages(30).get(30, TimeUnit.SECONDS);
+        var messages = chatCollectionItem.loadMessages(30).get(30, TimeUnit.SECONDS);
     }
 
     @Order(7)

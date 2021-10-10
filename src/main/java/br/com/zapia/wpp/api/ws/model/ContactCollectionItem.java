@@ -1,6 +1,7 @@
 package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 public class ContactCollectionItem extends BaseCollectionItem {
@@ -10,12 +11,17 @@ public class ContactCollectionItem extends BaseCollectionItem {
     }
 
     @Override
-    void build(JsonObject jsonObject) {
+    void build() {
 
     }
 
     @Override
     void update(BaseCollectionItem baseCollectionItem) {
+
+    }
+
+    @Override
+    void update(JsonElement jsonElement) {
 
     }
 }

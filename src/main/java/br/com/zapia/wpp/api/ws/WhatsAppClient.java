@@ -168,6 +168,7 @@ public class WhatsAppClient extends WebSocketClient {
     private void createCollections() {
         collections.clear();
         collections.put(ChatCollection.class, new ChatCollection(this));
+        collections.put(MessageCollection.class, new MessageCollection(this));
         collections.put(ContactCollection.class, new ContactCollection(this));
     }
 
@@ -251,7 +252,7 @@ public class WhatsAppClient extends WebSocketClient {
             jsonObject.addProperty("jid", contactCollectionItem.getId());
             var chat = new ChatCollectionItem(this, jsonObject);
             if (!getCollection(ChatCollection.class).tryAddItem(id, chat))
-                logger.log(Level.WARNING, "Fail on add contact to collection: " + id);
+                logger.log(Level.WARNING, "Fail on add chat to collection: " + id);
 
             return chat;
         });
@@ -301,41 +302,61 @@ public class WhatsAppClient extends WebSocketClient {
     }
 
     public CompletableFuture<MessageCollectionItem> sendMessage(String jid, MessageSend messageSend) {
-        var content = prepareMessageContent(messageSend);
+        try {
+            var content = prepareMessageContent(messageSend);
 
-        var builder = WebMessageInfo.newBuilder();
-        builder
-                .setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(jid)).setFromMe(true).setId(generateMessageID()))
-                .setMessage(content)
-                .setMessageTimestamp(System.currentTimeMillis() / 1000L)
-                .setStatus(WebMessageInfo.WebMessageInfoStatus.PENDING);
-        if (jid.contains("@g.us")) {
-            builder.setParticipant(authInfo.getWid());
+            var builder = WebMessageInfo.newBuilder();
+            builder
+                    .setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(jid)).setFromMe(true).setId(generateMessageID()))
+                    .setMessage(content)
+                    .setMessageTimestamp(System.currentTimeMillis() / 1000L)
+                    .setStatus(WebMessageInfo.WebMessageInfoStatus.PENDING);
+            if (jid.contains("@g.us")) {
+                builder.setParticipant(authInfo.getWid());
+            }
+            var jsonObj = new JsonObject();
+            jsonObj.addProperty("epoch", String.valueOf(msgCount));
+            jsonObj.addProperty("type", "relay");
+
+            var msg = builder.build();
+
+            var childs = new JsonArray();
+            var child = new JsonArray();
+            child.add("message");
+            child.add(JsonNull.INSTANCE);
+            child.add(Util.GSON.toJsonTree(msg.toByteArray()));
+            childs.add(child);
+
+            var jsonArray = new JsonArray();
+            jsonArray.add("action");
+            jsonArray.add(jsonObj);
+            jsonArray.add(childs);
+
+            //TODO: build message and add to collection before send
+
+            MessageCollectionItem messageCollectionItem;
+            try {
+                messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
+                if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
+                    throw new RuntimeException("Error on add to MessageCollection");
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "Error on build MessageCollectionItem before send", e);
+                return CompletableFuture.failedFuture(e);
+            }
+
+            MessageCollectionItem finalMessageCollectionItem = messageCollectionItem;
+            return sendBinary(
+                    builder.getKey().getId(),
+                    jsonArray,
+                    new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.message, jid.equals(authInfo.getWid()) ? BinaryConstants.WA.WAFlag.acknowledge : BinaryConstants.WA.WAFlag.ignore),
+                    JsonElement.class).thenApply(jsonElement -> {
+                //TODO: check return status
+                return finalMessageCollectionItem;
+            });
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "SendMessage", e);
+            return CompletableFuture.failedFuture(e);
         }
-        var jsonObj = new JsonObject();
-        jsonObj.addProperty("epoch", String.valueOf(msgCount));
-        jsonObj.addProperty("type", "relay");
-
-        var childs = new JsonArray();
-        var child = new JsonArray();
-        child.add("message");
-        child.add(JsonNull.INSTANCE);
-        child.add(Util.GSON.toJsonTree(builder.build().toByteArray()));
-        childs.add(child);
-
-        var jsonArray = new JsonArray();
-        jsonArray.add("action");
-        jsonArray.add(jsonObj);
-        jsonArray.add(childs);
-
-        return sendBinary(
-                builder.getKey().getId(),
-                jsonArray,
-                new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.message, jid.equals(authInfo.getWid()) ? BinaryConstants.WA.WAFlag.acknowledge : BinaryConstants.WA.WAFlag.ignore),
-                JsonElement.class).thenApply(jsonElement -> {
-
-            return null;
-        });
     }
 
     //TODO: others message types
@@ -568,9 +589,22 @@ public class WhatsAppClient extends WebSocketClient {
                                         switch (jsonDecoded.get(1).getAsJsonObject().get("add").getAsString()) {
                                             case "relay":
                                             case "update":
-                                                var msgBuilder = Message.newBuilder();
+                                                var msgBuilder = WebMessageInfo.newBuilder();
                                                 JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(current.get(0).getAsJsonArray().get(2).getAsJsonObject()), msgBuilder);
                                                 var msg = msgBuilder.build();
+                                                var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
+                                                switch (jsonDecoded.get(1).getAsJsonObject().get("add").getAsString()) {
+                                                    case "relay": {
+                                                        if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
+                                                            logger.log(Level.WARNING, "Fail on add received message to collection: " + messageCollectionItem.getId());
+                                                        break;
+                                                    }
+                                                    case "update": {
+                                                        if (!getCollection(MessageCollection.class).changeItem(messageCollectionItem.getId(), messageCollectionItem))
+                                                            logger.log(Level.WARNING, "Fail on update received message: " + messageCollectionItem.getId());
+                                                        break;
+                                                    }
+                                                }
                                                 break;
                                             default:
                                                 logger.log(Level.WARNING, "Received unexpected action msg type: {" + jsonDecoded.get(1).getAsJsonObject().get("add").getAsString() + "} - with content: {" + current + "}");
@@ -636,6 +670,26 @@ public class WhatsAppClient extends WebSocketClient {
                         case "Stream":
                             break;
                         case "Props":
+                            break;
+                        case "Msg":
+                            var content = jsonArray.get(1).getAsJsonObject();
+                            var cmd = content.get("cmd").getAsString();
+                            switch (cmd) {
+                                case "ack":
+                                    if (!getCollection(MessageCollection.class).changeItem(content.get("id").getAsString(), content))
+                                        logger.log(Level.WARNING, "Fail on update received message: " + content.get("id").getAsString());
+                                    break;
+                                case "acks":
+                                    var ids = content.getAsJsonArray("id");
+                                    for (int i = 0; i < ids.size(); i++) {
+                                        var id = ids.get(i).getAsString();
+                                        if (!getCollection(MessageCollection.class).changeItem(id, content))
+                                            logger.log(Level.WARNING, "Fail on update received message: " + content.get("id").getAsString());
+                                    }
+                                    break;
+                                default:
+                                    logger.log(Level.WARNING, "Received unexpected msg cmd: {" + cmd + "} with content {" + content + "}");
+                            }
                             break;
                         default:
                             logger.log(Level.WARNING, "Received unexpected tag: {" + jsonArray.get(0).getAsString() + "} with content: {" + jsonArray + "}");

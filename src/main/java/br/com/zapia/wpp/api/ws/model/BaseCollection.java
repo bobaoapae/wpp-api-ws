@@ -61,6 +61,7 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
             var removed = items.remove(id);
             if (removed != null) {
                 triggerEvent(EventType.REMOVE, List.of(removed));
+
                 return true;
             }
 
@@ -71,7 +72,23 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
     public boolean changeItem(String id, T item) {
         synchronized (items) {
             if (items.containsKey(id)) {
-                items.get(id).update(item);
+                var current = items.get(id);
+                current.update(item);
+                triggerEvent(EventType.CHANGE, List.of(current));
+
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    public boolean changeItem(String id, JsonElement jsonElement) {
+        synchronized (items) {
+            if (items.containsKey(id)) {
+                var current = items.get(id);
+                current.update(jsonElement);
+                triggerEvent(EventType.CHANGE, List.of(current));
 
                 return true;
             }
@@ -107,7 +124,7 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
         }
     }
 
-    private void triggerEvent(EventType eventType, List<T> data) {
+    public void triggerEvent(EventType eventType, List<T> data) {
         if (!events.containsKey(eventType))
             return;
 

@@ -8,20 +8,14 @@ import java.util.concurrent.CompletableFuture;
 
 public class MessageCollection extends BaseCollection<MessageCollectionItem> {
 
-    private final ChatCollectionItem chatCollectionItem;
 
-    public MessageCollection(WhatsAppClient whatsAppClient, ChatCollectionItem chatCollectionItem) {
+    public MessageCollection(WhatsAppClient whatsAppClient) {
         super(whatsAppClient, CollectionType.MESSAGE);
-        this.chatCollectionItem = chatCollectionItem;
-    }
-
-    public CompletableFuture<List<MessageCollectionItem>> loadMessages(int count) {
-        return whatsAppClient.loadMessages(chatCollectionItem.getId(), count, getLastItem());
     }
 
     @Override
     public CompletableFuture<Void> sync() {
-        return loadMessages(30).thenAccept(messageCollectionItems -> setSynced());
+        return CompletableFuture.failedFuture(new Exception("Method not supported"));
     }
 
     @Override
