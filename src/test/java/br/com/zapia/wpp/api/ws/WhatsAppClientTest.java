@@ -3,8 +3,11 @@ package br.com.zapia.wpp.api.ws;
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonParser;
+import org.apache.tika.mime.MimeTypeException;
 import org.junit.jupiter.api.*;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -100,7 +103,25 @@ class WhatsAppClientTest {
     @Order(7)
     @Test
     public void sendTextMessage() throws ExecutionException, InterruptedException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new MessageSend.Builder().withText("teste").build()).get(30, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").build()).get(30, TimeUnit.SECONDS);
+    }
+
+    @Order(8)
+    @Test
+    public void sendDocumentMessage() throws ExecutionException, InterruptedException, TimeoutException, MimeTypeException, IOException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("pom.xml")).build()).get(30, TimeUnit.SECONDS);
+    }
+
+    @Order(9)
+    @Test
+    public void sendImageMessage() throws ExecutionException, InterruptedException, TimeoutException, MimeTypeException, IOException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("img.png")).build()).get(30, TimeUnit.SECONDS);
+    }
+
+    @Order(10)
+    @Test
+    public void sendVideoMessage() throws ExecutionException, InterruptedException, TimeoutException, MimeTypeException, IOException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("video.mp4")).build()).get(60, TimeUnit.SECONDS);
     }
 
     /*@Order(3)

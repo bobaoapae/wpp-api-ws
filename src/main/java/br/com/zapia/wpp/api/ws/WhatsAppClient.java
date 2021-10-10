@@ -1,23 +1,21 @@
 package br.com.zapia.wpp.api.ws;
 
-import at.favre.lib.crypto.HKDF;
 import br.com.zapia.wpp.api.ws.binary.BinaryConstants;
 import br.com.zapia.wpp.api.ws.binary.WABinaryDecoder;
 import br.com.zapia.wpp.api.ws.binary.WABinaryEncoder;
-import br.com.zapia.wpp.api.ws.binary.protos.ExtendedTextMessage;
-import br.com.zapia.wpp.api.ws.binary.protos.Message;
-import br.com.zapia.wpp.api.ws.binary.protos.MessageKey;
-import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
+import br.com.zapia.wpp.api.ws.binary.protos.*;
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.model.communication.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.common.hash.Hashing;
 import com.google.common.primitives.Bytes;
 import com.google.gson.*;
+import com.google.protobuf.ByteString;
 import com.google.protobuf.util.JsonFormat;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.qrcode.QRCodeWriter;
+import org.apache.tika.Tika;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
@@ -28,6 +26,9 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -66,6 +67,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     private int msgCount;
     private LocalDateTime lastSeen;
+    private MediaConnResponse.MediaConn cacheMediaConnResponse;
     private ScheduledFuture<?> refreshQrCodeScheduler;
     private ScheduledFuture<?> keepAliveScheduled;
 
@@ -301,10 +303,8 @@ public class WhatsAppClient extends WebSocketClient {
                 });
     }
 
-    public CompletableFuture<MessageCollectionItem> sendMessage(String jid, MessageSend messageSend) {
-        try {
-            var content = prepareMessageContent(messageSend);
-
+    public CompletableFuture<MessageCollectionItem> sendMessage(String jid, SendMessageRequest messageSend) {
+        return prepareMessageContent(messageSend).thenCompose(content -> {
             var builder = WebMessageInfo.newBuilder();
             builder
                     .setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(jid)).setFromMe(true).setId(generateMessageID()))
@@ -353,26 +353,157 @@ public class WhatsAppClient extends WebSocketClient {
                 //TODO: check return status
                 return finalMessageCollectionItem;
             });
+        });
+    }
+
+    //TODO: others message types
+    private CompletableFuture<Message.Builder> prepareMessageContent(SendMessageRequest messageSend) {
+        try {
+            var msgBuilder = Message.newBuilder();
+            switch (messageSend.getMessageType()) {
+                case EXTENDED_TEXT:
+                case TEXT: {
+                    var textMsgBuilder = ExtendedTextMessage.newBuilder();
+                    textMsgBuilder.setText(messageSend.getText());
+                    msgBuilder.setExtendedTextMessage(textMsgBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
+                case DOCUMENT:
+                case IMAGE:
+                case VIDEO:
+                case AUDIO:
+                case STICKER:
+                    return prepareMessageMedia(msgBuilder, messageSend).thenApply(otherMsgBuilder -> otherMsgBuilder);
+                default: {
+                    logger.log(Level.SEVERE, "Unsupported message type to send: {" + messageSend.getMessageType() + "}");
+                    return CompletableFuture.failedFuture(new Exception("Unsupported message type to send: {" + messageSend.getMessageType() + "}"));
+                }
+            }
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "SendMessage", e);
+            logger.log(Level.SEVERE, "PrepareMessageContent", e);
             return CompletableFuture.failedFuture(e);
         }
     }
 
-    //TODO: others message types
-    private Message.Builder prepareMessageContent(MessageSend messageSend) {
-        var msgBuilder = Message.newBuilder();
-        switch (messageSend.getMessageType()) {
-            case EXTENDED_TEXT:
-            case TEXT: {
-                var textMsgBuilder = ExtendedTextMessage.newBuilder();
-                textMsgBuilder.setText(messageSend.getText());
-                msgBuilder.setExtendedTextMessage(textMsgBuilder);
-                break;
-            }
+    private CompletableFuture<Message.Builder> prepareMessageMedia(Message.Builder msgBuilder, SendMessageRequest messageSend) {
+        if (messageSend.getMessageType() == MessageType.STICKER && messageSend.getText() != null && !messageSend.getText().isEmpty()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Cannot send caption with a sticker"));
         }
 
-        return msgBuilder;
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                var streamFile = Base64.getDecoder().decode(messageSend.getFile().getEncodedFile());
+                var mimeType = new Tika().detect(streamFile);
+
+                var encryptedStream = Util.encryptStream(streamFile, messageSend.getMessageType());
+
+                var sha256EncB64 = Util.encodeURIComponent(Base64.getEncoder().encodeToString(encryptedStream.getSha256Enc()).replace("+", "-").replace("/", "_").replace("=", ""));
+
+                var mediaConn = getMediaConn().join();
+
+                for (MediaConnResponse.MediaConn.Host host : mediaConn.getHosts()) {
+                    try {
+                        var auth = Util.encodeURIComponent(mediaConn.getAuth());
+                        var url = "https://" + host.getHostname() + Constants.MediaPathMap.get(messageSend.getMessageType()) + "/" + sha256EncB64 + "?auth=" + auth + "&token=" + sha256EncB64;
+
+
+                        HttpRequest requestBodyOfInputStream = HttpRequest.newBuilder()
+                                .header("Content-Type", "application/octet-stream")
+                                .POST(HttpRequest.BodyPublishers.ofByteArray(encryptedStream.getEncryptedStream()))
+                                .uri(URI.create(url))
+                                .build();
+
+                        var client = HttpClient.newHttpClient();
+                        var response = client.send(requestBodyOfInputStream, HttpResponse.BodyHandlers.ofString());
+
+                        try {
+                            var bodyResponse = response.body();
+
+                            if (bodyResponse == null || bodyResponse.isEmpty()) {
+                                throw new Exception("Body Response is empty");
+                            }
+
+                            var uploadMediaResponse = Util.GSON.fromJson(bodyResponse, UploadMediaResponse.class);
+
+                            if (uploadMediaResponse.getUrl() == null || uploadMediaResponse.getUrl().isEmpty()) {
+                                throw new Exception("Upload URL is empty");
+                            }
+
+                            switch (messageSend.getMessageType()) {
+                                case DOCUMENT: {
+                                    var documentBuilder = DocumentMessage.newBuilder();
+                                    documentBuilder
+                                            .setUrl(uploadMediaResponse.getUrl())
+                                            .setMediaKey(ByteString.copyFrom(encryptedStream.getMediaKey()))
+                                            .setMimetype(mimeType)
+                                            .setFileEncSha256(ByteString.copyFrom(encryptedStream.getSha256Enc()))
+                                            .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
+                                            .setFileLength(encryptedStream.getFileLength())
+                                            .setFileName(messageSend.getFile().getFileName());
+                                    msgBuilder.setDocumentMessage(documentBuilder);
+                                    break;
+                                }
+                                case IMAGE: {
+                                    var imageBuilder = ImageMessage.newBuilder();
+                                    imageBuilder
+                                            .setUrl(uploadMediaResponse.getUrl())
+                                            .setMediaKey(ByteString.copyFrom(encryptedStream.getMediaKey()))
+                                            .setMimetype(mimeType)
+                                            .setFileEncSha256(ByteString.copyFrom(encryptedStream.getSha256Enc()))
+                                            .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
+                                            .setFileLength(encryptedStream.getFileLength())
+                                            .setJpegThumbnail(ByteString.copyFrom(Util.generateThumbnail(streamFile, messageSend.getMessageType())));
+                                    msgBuilder.setImageMessage(imageBuilder);
+                                    break;
+                                }
+                                case VIDEO: {
+                                    var videoBuilder = VideoMessage.newBuilder();
+                                    videoBuilder
+                                            .setUrl(uploadMediaResponse.getUrl())
+                                            .setMediaKey(ByteString.copyFrom(encryptedStream.getMediaKey()))
+                                            .setMimetype(mimeType)
+                                            .setFileEncSha256(ByteString.copyFrom(encryptedStream.getSha256Enc()))
+                                            .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
+                                            .setFileLength(encryptedStream.getFileLength())
+                                            .setSeconds(Util.getMediaDuration(streamFile))
+                                            .setJpegThumbnail(ByteString.copyFrom(Util.generateThumbnail(streamFile, messageSend.getMessageType())));
+                                    msgBuilder.setVideoMessage(videoBuilder);
+                                    break;
+                                }
+                            }
+
+                        } catch (Exception e) {
+                            cacheMediaConnResponse = null;
+                            mediaConn = getMediaConn().join();
+                            throw new Exception(response.body(), e);
+                        }
+
+
+                    } catch (Exception e) {
+                        var isLast = host.equals(mediaConn.getHosts()[mediaConn.getHosts().length - 1]);
+                        var append = isLast ? "" : ", retrying...";
+                        logger.log(Level.WARNING, "Error uploading media to {" + host.getHostname() + "}" + append, e);
+                    }
+                }
+
+                return msgBuilder;
+
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "PrepareMessageMedia", e);
+                throw new CompletionException(e);
+            }
+        }, executorService);
+    }
+
+    public CompletableFuture<MediaConnResponse.MediaConn> getMediaConn() {
+        if (cacheMediaConnResponse != null && cacheMediaConnResponse.getFetchDate().plusSeconds(cacheMediaConnResponse.getTtl()).isAfter(LocalDateTime.now())) {
+            return CompletableFuture.completedFuture(cacheMediaConnResponse);
+        }
+        return sendJson(new MediaConnRequest().toJson(), MediaConnResponse.class).thenApply(mediaConnResponse -> {
+            mediaConnResponse.getMedia_conn().setFetchDate(LocalDateTime.now());
+            cacheMediaConnResponse = mediaConnResponse.getMedia_conn();
+            return cacheMediaConnResponse;
+        });
     }
 
     private void initNewSession() {
@@ -431,11 +562,7 @@ public class WhatsAppClient extends WebSocketClient {
 
             var sharedKey = CURVE_25519.calculateAgreement(Arrays.copyOf(decodedSecret, 32), Base64.getDecoder().decode(authInfo.getPrivateKey()));
 
-            var hkdf = HKDF.fromHmacSha256();
-
-            var staticSalt32Byte = new byte[]{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-
-            var expandedKey = hkdf.extractAndExpand(staticSalt32Byte, sharedKey, null, 80);
+            var expandedKey = Util.hkdfExpand(sharedKey, 80, null);
 
             var hmacValidationKey = Arrays.copyOfRange(expandedKey, 32, 64);
 

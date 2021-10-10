@@ -24,7 +24,7 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
     private final Map<String, T> items;
     private final Map<EventType, List<ConsumerEventCancellable<List<T>>>> events;
 
-    private CompletableFuture<JsonElement> syncFuture;
+    private final CompletableFuture<JsonElement> syncFuture;
     private boolean isSynced;
     private boolean firstSync;
 
@@ -35,6 +35,7 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
         this.events = new ConcurrentHashMap<>();
         this.lockSync = new Object();
         this.firstSync = true;
+        this.syncFuture = new CompletableFuture<>();
     }
 
     public void listenToEvent(EventType eventType, ConsumerEventCancellable<List<T>> consumer) {
@@ -184,9 +185,10 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
             }
 
             var query = new BaseQuery(collectionType.name().toLowerCase(), epoch, null);
-            syncFuture = whatsAppClient.sendBinary(query.toJsonArray(), new BinaryConstants.WA.WATags(collectionType.getWaMetric(), BinaryConstants.WA.WAFlag.ignore), JsonElement.class);
-            return syncFuture.thenAccept(jsonElement -> {
-                receiveSyncData(processSync(jsonElement));
+            return whatsAppClient.sendBinary(query.toJsonArray(), new BinaryConstants.WA.WATags(collectionType.getWaMetric(), BinaryConstants.WA.WAFlag.ignore), JsonElement.class).thenCompose(jsonElement -> {
+                return syncFuture.thenAccept(jsonElement1 -> {
+                    receiveSyncData(processSync(jsonElement1));
+                });
             });
         }
     }
