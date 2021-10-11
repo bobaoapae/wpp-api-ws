@@ -11,9 +11,10 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import io.humble.video.*;
-import io.humble.video.awt.MediaPictureConverter;
-import io.humble.video.awt.MediaPictureConverterFactory;
+import org.apache.tika.Tika;
+import org.bytedeco.ffmpeg.global.avutil;
+import org.bytedeco.javacv.FFmpegFrameGrabber;
+import org.bytedeco.javacv.Java2DFrameConverter;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -174,6 +175,14 @@ public class Util {
                 .replace("%7E", "~");
     }
 
+    public static String detectMimeType(byte[] data) {
+        var mime = new Tika().detect(data);
+        if (mime.equals("application/ogg")) {
+            mime = "audio/ogg; codecs=opus";
+        }
+        return mime;
+    }
+
     public static byte[] generateThumbnail(byte[] streamFile, MessageType messageType) throws IOException, InterruptedException {
         switch (messageType) {
             case IMAGE -> {
@@ -208,104 +217,22 @@ public class Util {
         return buffer.toByteArray();
     }
 
-    public static byte[] extractFirstFrameFromVideo(byte[] videoData) throws IOException, InterruptedException {
+    public static byte[] extractFirstFrameFromVideo(byte[] videoData) throws IOException {
+        avutil.av_log_set_level(avutil.AV_LOG_ERROR);
         var baos = new ByteArrayOutputStream();
-        var fileTemp = File.createTempFile("extractFrame", ".tmp");
-        Files.write(fileTemp.toPath(), videoData);
-        var demuxer = Demuxer.make();
-        demuxer.open(fileTemp.getAbsolutePath(), null, false, true, null, null);
-
-        int numStreams = demuxer.getNumStreams();
-
-        /*
-         * Iterate through the streams to find the first video stream
-         */
-        int videoStreamId = -1;
-        long streamStartTime = Global.NO_PTS;
-        Decoder videoDecoder = null;
-        for (int i = 0; i < numStreams; i++) {
-            final DemuxerStream stream = demuxer.getStream(i);
-            streamStartTime = stream.getStartTime();
-            final Decoder decoder = stream.getDecoder();
-            if (decoder != null && decoder.getCodecType() == MediaDescriptor.Type.MEDIA_VIDEO) {
-                videoStreamId = i;
-                videoDecoder = decoder;
-                // stop at the first one.
-                break;
-            }
-        }
-        if (videoStreamId == -1)
-            throw new IOException("could not find video stream in container");
-
-        /*
-         * Now we have found the audio stream in this file.  Let's open up our decoder so it can
-         * do work.
-         */
-        videoDecoder.open(null, null);
-
-        final MediaPicture picture = MediaPicture.make(
-                videoDecoder.getWidth(),
-                videoDecoder.getHeight(),
-                videoDecoder.getPixelFormat());
-
-        /** A converter object we'll use to convert the picture in the video to a BGR_24 format that Java Swing
-         * can work with. You can still access the data directly in the MediaPicture if you prefer, but this
-         * abstracts away from this demo most of that byte-conversion work. Go read the source code for the
-         * converters if you're a glutton for punishment.
-         */
-        final MediaPictureConverter converter =
-                MediaPictureConverterFactory.createConverter(
-                        MediaPictureConverterFactory.HUMBLE_BGR_24,
-                        picture);
-        BufferedImage image = null;
-
-        final MediaPacket packet = MediaPacket.make();
-        while (demuxer.read(packet) >= 0) {
-            /**
-             * Now we have a packet, let's see if it belongs to our video stream
-             */
-            if (packet.getStreamIndex() == videoStreamId) {
-                /**
-                 * A packet can actually contain multiple sets of samples (or frames of samples
-                 * in decoding speak).  So, we may need to call decode  multiple
-                 * times at different offsets in the packet's data.  We capture that here.
-                 */
-                int offset = 0;
-                int bytesRead = 0;
-                do {
-                    bytesRead += videoDecoder.decode(picture, packet, offset);
-                    if (picture.isComplete()) {
-                        image = converter.toImage(image, picture);
-                        ImageIO.write(image, "jpeg", baos);
-                        break;
-                    }
-                    offset += bytesRead;
-                } while (offset < packet.getSize());
-            }
-        }
-
-        do {
-            videoDecoder.decode(picture, null, 0);
-        } while (picture.isComplete());
-        fileTemp.delete();
-
+        var bufferedImage = new BufferedImage(48, 48, BufferedImage.TYPE_INT_RGB);
+        var frameGrabber = new FFmpegFrameGrabber(new ByteArrayInputStream(videoData));
+        frameGrabber.start();
+        Java2DFrameConverter.copy(frameGrabber.grab(), bufferedImage);
+        ImageIO.write(bufferedImage, "jpeg", baos);
+        frameGrabber.stop();
         return baos.toByteArray();
     }
 
-    public static int getMediaDuration(byte[] streamFile) throws IOException, InterruptedException {
-        var fileTemp = File.createTempFile("extractFrame", ".tmp");
-        Files.write(fileTemp.toPath(), streamFile);
-        var demuxer = Demuxer.make();
-        demuxer.open(fileTemp.getAbsolutePath(), null, false, true, null, null);
-        var duration = demuxer.getDuration();
-        if (duration == Global.NO_PTS) {
-            return 0;
-        }
-        double d = 1.0 * duration / Global.DEFAULT_PTS_PER_SECOND;
-
-        demuxer.close();
-        fileTemp.delete();
-
-        return (int) d;
+    public static int getMediaDuration(byte[] streamFile) throws IOException {
+        avutil.av_log_set_level(avutil.AV_LOG_ERROR);
+        var frameGrabber = new FFmpegFrameGrabber(new ByteArrayInputStream(streamFile));
+        frameGrabber.start();
+        return (int) (frameGrabber.getLengthInVideoFrames() / frameGrabber.getFrameRate());
     }
 }

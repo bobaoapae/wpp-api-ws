@@ -1,7 +1,6 @@
 package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.utils.Util;
-import org.apache.tika.Tika;
 
 import java.io.File;
 import java.io.IOException;
@@ -232,13 +231,19 @@ public class SendMessageRequest {
             if (isForceDocument()) {
                 return MessageType.DOCUMENT;
             }
-            var mime = new Tika().detect(Base64.getDecoder().decode(encodedFile));
+            if (isForceSticker()) {
+                return MessageType.STICKER;
+            }
+            var mime = Util.detectMimeType(Base64.getDecoder().decode(encodedFile));
             switch (mime.split("/")[0]) {
                 case "image" -> {
                     return MessageType.IMAGE;
                 }
                 case "video" -> {
                     return MessageType.VIDEO;
+                }
+                case "audio" -> {
+                    return MessageType.AUDIO;
                 }
                 default -> {
                     return MessageType.DOCUMENT;

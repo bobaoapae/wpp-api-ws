@@ -15,7 +15,6 @@ import com.google.protobuf.util.JsonFormat;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.qrcode.QRCodeWriter;
-import org.apache.tika.Tika;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
@@ -393,7 +392,7 @@ public class WhatsAppClient extends WebSocketClient {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 var streamFile = Base64.getDecoder().decode(messageSend.getFile().getEncodedFile());
-                var mimeType = new Tika().detect(streamFile);
+                var mimeType = Util.detectMimeType(streamFile);
 
                 var encryptedStream = Util.encryptStream(streamFile, messageSend.getMessageType());
 
@@ -466,11 +465,27 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
                                             .setFileLength(encryptedStream.getFileLength())
                                             .setSeconds(Util.getMediaDuration(streamFile))
+                                            .setGifPlayback(messageSend.getFile().isForceGif())
                                             .setJpegThumbnail(ByteString.copyFrom(Util.generateThumbnail(streamFile, messageSend.getMessageType())));
                                     msgBuilder.setVideoMessage(videoBuilder);
                                     break;
                                 }
+                                case AUDIO: {
+                                    var audioBuilder = AudioMessage.newBuilder();
+                                    audioBuilder
+                                            .setUrl(uploadMediaResponse.getUrl())
+                                            .setMediaKey(ByteString.copyFrom(encryptedStream.getMediaKey()))
+                                            .setMimetype(mimeType)
+                                            .setFileEncSha256(ByteString.copyFrom(encryptedStream.getSha256Enc()))
+                                            .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
+                                            .setFileLength(encryptedStream.getFileLength())
+                                            .setSeconds(Util.getMediaDuration(streamFile))
+                                            .setPtt(messageSend.getFile().isForcePtt());
+                                    msgBuilder.setAudioMessage(audioBuilder);
+                                    break;
+                                }
                             }
+                            break;
 
                         } catch (Exception e) {
                             cacheMediaConnResponse = null;
@@ -811,7 +826,7 @@ public class WhatsAppClient extends WebSocketClient {
                                     for (int i = 0; i < ids.size(); i++) {
                                         var id = ids.get(i).getAsString();
                                         if (!getCollection(MessageCollection.class).changeItem(id, content))
-                                            logger.log(Level.WARNING, "Fail on update received message: " + content.get("id").getAsString());
+                                            logger.log(Level.WARNING, "Fail on update received message: " + id);
                                     }
                                     break;
                                 default:
