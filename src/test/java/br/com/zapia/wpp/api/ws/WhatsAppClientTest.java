@@ -153,6 +153,31 @@ class WhatsAppClientTest {
         var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withVCard("João", "5544991050665").build()).get(60, TimeUnit.SECONDS);
     }
 
+    @Order(16)
+    @Test
+    public void sendButtonMsg() throws ExecutionException, InterruptedException, TimeoutException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withButtons("title", "footer", buttonsBuilder -> buttonsBuilder.withButton("button1").withButton("button2").withButton("button3")).build()).get(60, TimeUnit.SECONDS);
+    }
+
+    @Order(17)
+    @Test
+    public void sendListMsg() throws ExecutionException, InterruptedException, TimeoutException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withList(listBuilder -> {
+            listBuilder
+                    .withTitle("Title")
+                    .withDescription("Description")
+                    .withFooter("Footer")
+                    .withButtonText("Button Text");
+            for (int x = 0; x < 10; x++) {
+                listBuilder.withSection("Section " + x, sectionBuilder -> {
+                    for (int y = 0; y < 20; y++) {
+                        sectionBuilder.withRow("Row " + y);
+                    }
+                });
+            }
+        }).build()).get(60, TimeUnit.SECONDS);
+    }
+
     /*@Order(3)
     @Test
     public void disconnectWs() throws InterruptedException {

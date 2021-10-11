@@ -414,6 +414,41 @@ public class WhatsAppClient extends WebSocketClient {
                     msgBuilder.setContactMessage(contactMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
+                case BUTTONS_MESSAGE: {
+                    var buttonsMsgBuilder = ButtonsMessage.newBuilder();
+                    for (String button : messageSend.getButtons().getButtons()) {
+                        buttonsMsgBuilder.addButtons(Button.newBuilder().setButtonText(ButtonText.newBuilder().setDisplayText(button)).setButtonId(generateMessageID()).setType(Button.ButtonType.RESPONSE));
+                    }
+                    buttonsMsgBuilder
+                            .setFooterText(messageSend.getButtons().getFooter())
+                            .setContentText(messageSend.getButtons().getTitle())
+                            .setHeaderType(ButtonsMessage.ButtonsMessageHeaderType.TEXT);
+                    buttonsMsgBuilder.setText(messageSend.getText() == null || messageSend.getText().isEmpty() ? " " : messageSend.getText());
+                    msgBuilder.setButtonsMessage(buttonsMsgBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
+                case LIST_MESSAGE: {
+                    var listMsgBuilder = ListMessage.newBuilder();
+                    listMsgBuilder.setListType(ListMessage.ListMessageListType.SINGLE_SELECT);
+                    for (SendMessageRequest.Section section : messageSend.getWhatsAppList().getSections()) {
+                        var sectionBuilder = Section.newBuilder();
+                        sectionBuilder.setTitle(section.getTitle());
+                        for (SendMessageRequest.SectionItem row : section.getRows()) {
+                            var rowBuilder = Row.newBuilder();
+                            rowBuilder.setTitle(row.getTitle())
+                                    .setDescription(row.getDescription() == null ? "" : row.getDescription())
+                                    .setRowId(generateMessageID());
+                            sectionBuilder.addRows(rowBuilder);
+                        }
+                        listMsgBuilder.addSections(sectionBuilder);
+                    }
+                    listMsgBuilder.setTitle(messageSend.getWhatsAppList().getTitle())
+                            .setDescription(messageSend.getWhatsAppList().getDescription())
+                            .setFooterText(messageSend.getWhatsAppList().getFooter())
+                            .setButtonText(messageSend.getWhatsAppList().getButtonText());
+                    msgBuilder.setListMessage(listMsgBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
                 case DOCUMENT:
                 case IMAGE:
                 case VIDEO:
