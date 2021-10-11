@@ -15,6 +15,9 @@ import org.apache.tika.Tika;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Java2DFrameConverter;
+import org.opencv.core.MatOfByte;
+import org.opencv.core.MatOfInt;
+import org.opencv.imgcodecs.Imgcodecs;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -185,7 +188,7 @@ public class Util {
 
     public static byte[] generateThumbnail(byte[] streamFile, MessageType messageType) throws IOException, InterruptedException {
         switch (messageType) {
-            case IMAGE -> {
+            case IMAGE, STICKER -> {
                 return scaleImage(streamFile, 48, 48);
             }
             case VIDEO -> {
@@ -233,6 +236,15 @@ public class Util {
         avutil.av_log_set_level(avutil.AV_LOG_ERROR);
         var frameGrabber = new FFmpegFrameGrabber(new ByteArrayInputStream(streamFile));
         frameGrabber.start();
-        return (int) (frameGrabber.getLengthInVideoFrames() / frameGrabber.getFrameRate());
+        return (int) (frameGrabber.getLengthInTime() / 1000000);
+    }
+
+    public static byte[] convertImageToWebp(byte[] imgData) {
+        nu.pattern.OpenCV.loadLocally();
+        var image = Imgcodecs.imdecode(new MatOfByte(imgData), Imgcodecs.IMREAD_UNCHANGED);
+        var parameters = new MatOfInt(Imgcodecs.IMWRITE_WEBP_QUALITY, 100);
+        var output = new MatOfByte();
+        Imgcodecs.imencode(".webp", image, output, parameters);
+        return output.toArray();
     }
 }

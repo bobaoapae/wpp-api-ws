@@ -119,26 +119,38 @@ class WhatsAppClientTest {
 
     @Order(10)
     @Test
+    public void sendSticker() throws ExecutionException, InterruptedException, TimeoutException, IOException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("img.png"), fileBuilder -> fileBuilder.withForceSticker(true)).build()).get(30, TimeUnit.SECONDS);
+    }
+
+    @Order(11)
+    @Test
     public void sendVideoMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
         var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("video.mp4")).build()).get(60, TimeUnit.SECONDS);
     }
 
-    @Order(11)
+    @Order(12)
     @Test
     public void sendGifMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
         var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("video.mp4"), fileBuilder -> fileBuilder.withForceGif(true)).build()).get(60, TimeUnit.SECONDS);
     }
 
-    @Order(12)
+    @Order(13)
     @Test
     public void sendAudioMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
         var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("audio.ogg")).build()).get(60, TimeUnit.SECONDS);
     }
 
-    @Order(13)
+    @Order(14)
     @Test
     public void sendPttMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
         var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("audio.ogg"), fileBuilder -> fileBuilder.withForcePtt(true)).build()).get(60, TimeUnit.SECONDS);
+    }
+
+    @Order(15)
+    @Test
+    public void sendContactMsg() throws ExecutionException, InterruptedException, TimeoutException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withVCard("João", "5544991050665").build()).get(60, TimeUnit.SECONDS);
     }
 
     /*@Order(3)

@@ -15,6 +15,11 @@ import com.google.protobuf.util.JsonFormat;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.qrcode.QRCodeWriter;
+import ezvcard.Ezvcard;
+import ezvcard.VCard;
+import ezvcard.VCardVersion;
+import ezvcard.parameter.TelephoneType;
+import ezvcard.property.Telephone;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
@@ -259,6 +264,15 @@ public class WhatsAppClient extends WebSocketClient {
         });
     }
 
+    public CompletableFuture<ContactCollectionItem> findContactFromNumber(String number) {
+        return checkNumberExist(number).thenCompose(checkNumberExistResponse -> {
+            if (checkNumberExistResponse.getStatus() == 200) {
+                return findContactFromId(checkNumberExistResponse.getJid());
+            }
+            return CompletableFuture.completedFuture(null);
+        });
+    }
+
     public CompletableFuture<ContactCollectionItem> findContactFromId(String id) {
         var contactCache = getCollection(ContactCollection.class).getItem(id);
         if (contactCache != null) {
@@ -367,6 +381,39 @@ public class WhatsAppClient extends WebSocketClient {
                     msgBuilder.setExtendedTextMessage(textMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
+                case LOCATION:
+                case LIVE_LOCATION: {
+                    var locationMsgBuilder = LocationMessage.newBuilder();
+                    locationMsgBuilder
+                            .setDegreesLatitude(messageSend.getLocation().getLat())
+                            .setDegreesLongitude(messageSend.getLocation().getLng())
+                            .setAddress(messageSend.getLocation().getName());
+                    msgBuilder.setLocationMessage(locationMsgBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
+                case CONTACT: {
+                    VCard vcard = new VCard();
+                    vcard.setFormattedName(messageSend.getvCard().getName());
+                    Telephone tel = new Telephone(messageSend.getvCard().getTelephone());
+                    tel.getTypes().add(TelephoneType.CELL);
+                    vcard.addProperty(tel);
+
+                    var contact = findContactFromNumber(tel.getText()).join();
+                    if (contact != null) {
+                        tel.setParameter("waid", contact.getId().split("@")[0]);
+                    }
+                    var vcardStr = Ezvcard.write(vcard).version(VCardVersion.V3_0).go();
+                    if (contact != null) {
+                        vcardStr = vcardStr.replace("WAID", "waid");
+                    }
+
+                    var contactMsgBuilder = ContactMessage.newBuilder();
+                    contactMsgBuilder
+                            .setVcard(vcardStr)
+                            .setDisplayName(vcard.getFormattedName().getValue());
+                    msgBuilder.setContactMessage(contactMsgBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
                 case DOCUMENT:
                 case IMAGE:
                 case VIDEO:
@@ -392,7 +439,14 @@ public class WhatsAppClient extends WebSocketClient {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 var streamFile = Base64.getDecoder().decode(messageSend.getFile().getEncodedFile());
+
                 var mimeType = Util.detectMimeType(streamFile);
+
+
+                if (messageSend.getMessageType() == MessageType.STICKER && !mimeType.equals("image/webp")) {
+                    streamFile = Util.convertImageToWebp(Util.scaleImage(streamFile, 512, 512));
+                    mimeType = "image/webp";
+                }
 
                 var encryptedStream = Util.encryptStream(streamFile, messageSend.getMessageType());
 
@@ -482,6 +536,19 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setSeconds(Util.getMediaDuration(streamFile))
                                             .setPtt(messageSend.getFile().isForcePtt());
                                     msgBuilder.setAudioMessage(audioBuilder);
+                                    break;
+                                }
+                                case STICKER: {
+                                    var stickerBuilder = StickerMessage.newBuilder();
+                                    stickerBuilder
+                                            .setUrl(uploadMediaResponse.getUrl())
+                                            .setMediaKey(ByteString.copyFrom(encryptedStream.getMediaKey()))
+                                            .setMimetype(mimeType)
+                                            .setFileEncSha256(ByteString.copyFrom(encryptedStream.getSha256Enc()))
+                                            .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
+                                            .setFileLength(encryptedStream.getFileLength())
+                                            .setPngThumbnail(ByteString.copyFrom(Util.generateThumbnail(Base64.getDecoder().decode(messageSend.getFile().getEncodedFile()), messageSend.getMessageType())));
+                                    msgBuilder.setStickerMessage(stickerBuilder);
                                     break;
                                 }
                             }
