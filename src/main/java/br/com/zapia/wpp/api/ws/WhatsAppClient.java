@@ -736,7 +736,9 @@ public class WhatsAppClient extends WebSocketClient {
 
     //See WhatsApp Web {openStream} function
     private CompletableFuture<Void> syncCollections() {
-        return getCollection(ChatCollection.class).sync().thenCompose(unused -> getCollection(ContactCollection.class).sync());
+        var chat = getCollection(ChatCollection.class).sync();
+        var contact = getCollection(ContactCollection.class).sync();
+        return chat.thenCompose(unused -> contact);
         /**
          * sendBinary(new BaseQuery("status", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryStatus, BinaryConstants.WA.WAFlag.ignore), null);
          *             if (authInfo.isBusiness()) {
