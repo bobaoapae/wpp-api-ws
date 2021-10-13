@@ -14,5 +14,6 @@ public enum MessageType {
     STICKER,
     DOCUMENT,
     VIDEO,
-    AUDIO
+    AUDIO,
+    UNKNOWN
 }

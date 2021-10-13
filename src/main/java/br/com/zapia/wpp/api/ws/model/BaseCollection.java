@@ -14,7 +14,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public abstract class BaseCollection<T extends BaseCollectionItem> {
+public abstract class BaseCollection<T extends BaseCollectionItem<T>> {
 
     private static final Logger logger = Logger.getLogger(BaseCollection.class.getName());
 
@@ -43,6 +43,12 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
             events.put(eventType, new CopyOnWriteArrayList<>());
 
         events.get(eventType).add(consumer);
+    }
+
+    public boolean hasItem(String id) {
+        synchronized (items) {
+            return items.containsKey(id);
+        }
     }
 
     public boolean tryAddItem(String id, T item) {
@@ -130,10 +136,14 @@ public abstract class BaseCollection<T extends BaseCollectionItem> {
             return;
 
         for (var tConsumerEventCancellable : events.get(eventType)) {
-            if (tConsumerEventCancellable.isCanceled())
-                events.get(eventType).remove(tConsumerEventCancellable);
-            else
-                tConsumerEventCancellable.accept(data);
+            try {
+                if (tConsumerEventCancellable.isCanceled())
+                    events.get(eventType).remove(tConsumerEventCancellable);
+                else
+                    tConsumerEventCancellable.accept(data);
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "TriggerEvent - {" + eventType + "}", e);
+            }
         }
     }
 

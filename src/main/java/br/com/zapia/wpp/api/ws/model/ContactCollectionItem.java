@@ -4,7 +4,7 @@ import br.com.zapia.wpp.api.ws.WhatsAppClient;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
-public class ContactCollectionItem extends BaseCollectionItem {
+public class ContactCollectionItem extends BaseCollectionItem<ContactCollectionItem> {
 
     public ContactCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
         super(whatsAppClient, jsonObject);
@@ -16,7 +16,7 @@ public class ContactCollectionItem extends BaseCollectionItem {
     }
 
     @Override
-    void update(BaseCollectionItem baseCollectionItem) {
+    void update(ContactCollectionItem baseCollectionItem) {
 
     }
 

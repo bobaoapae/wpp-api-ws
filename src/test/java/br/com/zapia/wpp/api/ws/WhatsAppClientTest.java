@@ -27,6 +27,7 @@ class WhatsAppClientTest {
     private ChatCollectionItem chatCollectionItem;
     private CompletableFuture<MessageCollectionItem> eventAddMsg;
     private CompletableFuture<MessageCollectionItem> eventUpdateMsg;
+    private MessageCollectionItem msgReceived;
 
     @Order(0)
     @Test
@@ -63,20 +64,6 @@ class WhatsAppClientTest {
     @Test
     public void waitForConnect() throws ExecutionException, InterruptedException, TimeoutException {
         onConnect.get(30, TimeUnit.SECONDS);
-        eventAddMsg = new CompletableFuture<>();
-        eventUpdateMsg = new CompletableFuture<>();
-        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.ADD, new ConsumerEventCancellable<>() {
-            @Override
-            public void accept(List<MessageCollectionItem> messageCollectionItems) {
-                eventAddMsg.complete(messageCollectionItems.get(0));
-            }
-        });
-        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.CHANGE, new ConsumerEventCancellable<>() {
-            @Override
-            public void accept(List<MessageCollectionItem> messageCollectionItems) {
-                eventUpdateMsg.complete(messageCollectionItems.get(0));
-            }
-        });
     }
 
     @Order(4)
@@ -97,6 +84,7 @@ class WhatsAppClientTest {
     @Test
     public void loadMessages() throws ExecutionException, InterruptedException, TimeoutException {
         var messages = chatCollectionItem.loadMessages(30).get(30, TimeUnit.SECONDS);
+        TimeUnit.SECONDS.sleep(3);
     }
 
     @Order(7)
@@ -162,46 +150,91 @@ class WhatsAppClientTest {
     @Order(17)
     @Test
     public void sendListMsg() throws ExecutionException, InterruptedException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withList(listBuilder -> {
-            listBuilder
-                    .withTitle("Title")
-                    .withDescription("Description")
-                    .withFooter("Footer")
-                    .withButtonText("Button Text");
-            for (int x = 0; x < 10; x++) {
-                listBuilder.withSection("Section " + x, sectionBuilder -> {
-                    for (int y = 0; y < 20; y++) {
-                        sectionBuilder.withRow("Row " + y);
-                    }
-                });
+        if (!authInfo.isBusiness()) {
+            var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withList(listBuilder -> {
+                listBuilder
+                        .withTitle("Title")
+                        .withDescription("Description")
+                        .withFooter("Footer")
+                        .withButtonText("Button Text");
+                for (int x = 0; x < 10; x++) {
+                    listBuilder.withSection("Section " + x, sectionBuilder -> {
+                        for (int y = 0; y < 20; y++) {
+                            sectionBuilder.withRow("Row " + y);
+                        }
+                    });
+                }
+            }).build()).get(60, TimeUnit.SECONDS);
+        }
+    }
+
+    @Order(18)
+    @Test
+    public void checkLastMsg() throws InterruptedException {
+        TimeUnit.SECONDS.sleep(3);
+        var lastMsg = chatCollectionItem.getLastMessage();
+        assertNotNull(lastMsg);
+    }
+
+    @Order(19)
+    @Test
+    public void receiveMsg() throws ExecutionException, InterruptedException, TimeoutException {
+        eventAddMsg = new CompletableFuture<>();
+        eventUpdateMsg = new CompletableFuture<>();
+        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.ADD, new ConsumerEventCancellable<>() {
+            @Override
+            public void accept(List<MessageCollectionItem> messageCollectionItems) {
+                eventAddMsg.complete(messageCollectionItems.get(0));
             }
-        }).build()).get(60, TimeUnit.SECONDS);
+        });
+        whatsAppClient.getCollection(MessageCollection.class).listenToEvent(EventType.CHANGE, new ConsumerEventCancellable<>() {
+            @Override
+            public void accept(List<MessageCollectionItem> messageCollectionItems) {
+                eventUpdateMsg.complete(messageCollectionItems.get(0));
+            }
+        });
+        msgReceived = eventAddMsg.get(60, TimeUnit.SECONDS);
+        assertNotNull(msgReceived);
     }
 
-    /*@Order(3)
+    @Order(20)
     @Test
-    public void disconnectWs() throws InterruptedException {
-        whatsAppClient.closeBlocking();
+    public void downloadMsg() throws InterruptedException, ExecutionException, TimeoutException {
+        if (msgReceived.getMessageContent() instanceof MessageCollectionItem.MessageMediaContent messageMediaContent) {
+            var file = messageMediaContent.downloadMedia().get(60, TimeUnit.SECONDS);
+            assertNotNull(file);
+        }
     }
 
-    @Order(4)
+    @Order(21)
     @Test
-    public void createClientWithAuthInfo() {
-        onAuthInfo = new CompletableFuture<>();
-        whatsAppClient = new WhatsAppClientBuilder().withAuthInfo(authInfo).withOnQrCode(s -> {
-            System.out.println(s);
-        }).withOnAuthInfo(authInfo1 -> {
-            onAuthInfo.complete(authInfo1);
-        }).builder();
-        whatsAppClient.connect();
+    public void sendPresenceOnline() throws InterruptedException, ExecutionException, TimeoutException {
+        var response = whatsAppClient.sendPresence(PresenceType.AVAILABLE).get(60, TimeUnit.SECONDS);
+        assertNotNull(response);
+        TimeUnit.SECONDS.sleep(5);
     }
 
-    @Order(5)
+    @Order(22)
     @Test
-    public void waitForAuthInfo2() throws ExecutionException, InterruptedException, TimeoutException {
-        authInfo = onAuthInfo.get(10, TimeUnit.SECONDS);
-        assertNotNull(authInfo);
-    }*/
+    public void sendChatComposing() throws InterruptedException {
+        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.COMPOSING);
+        TimeUnit.SECONDS.sleep(5);
+    }
+
+    @Order(23)
+    @Test
+    public void sendChatRecording() throws InterruptedException {
+        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.RECORDING);
+        TimeUnit.SECONDS.sleep(5);
+    }
+
+    @Order(24)
+    @Test
+    public void sendChatPaused() throws InterruptedException {
+        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.PAUSED);
+        TimeUnit.SECONDS.sleep(5);
+    }
+
 
     @Order(99)
     @Test

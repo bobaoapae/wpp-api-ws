@@ -26,6 +26,8 @@ import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -41,6 +43,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -110,6 +113,33 @@ public class Util {
                 .hash().asBytes();
 
         return new EncryptedStream(mediaKey, Bytes.concat(encStream, hmac), hmac, sha256Enc, sha256Plain, stream.length);
+    }
+
+    public static byte[] decryptStream(byte[] stream, byte[] mediaKey, MessageType messageType) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
+        var generatedMediaKey = getMediaKey(mediaKey, messageType);
+
+
+        SecretKeySpec secretKey = new SecretKeySpec(generatedMediaKey.getCipherKey(), "AES");
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(generatedMediaKey.getIv()));
+
+        var fileData = Arrays.copyOf(stream, stream.length - 10);
+        var hmacValidation = Arrays.copyOfRange(stream, stream.length - 10, stream.length);
+        var hmac = Arrays.copyOf(Hashing.hmacSha256(generatedMediaKey.getMacKey())
+                .newHasher()
+                .putBytes(Bytes.concat(generatedMediaKey.getIv(), fileData))
+                .hash().asBytes(), 10);
+
+        if (!Arrays.equals(hmacValidation, hmac))
+            throw new IllegalStateException("HMAC validation failed on decrypt stream");
+
+        return cipher.doFinal(fileData);
+    }
+
+    public static File convertByteArrayToFile(byte[] data, String fileName) throws IOException {
+        var tempFile = File.createTempFile(fileName, ".tmp");
+        Files.write(tempFile.toPath(), data);
+        return tempFile;
     }
 
     public static MediaKey getMediaKey(byte[] mediaKey, MessageType messageType) {
@@ -246,5 +276,26 @@ public class Util {
         var output = new MatOfByte();
         Imgcodecs.imencode(".webp", image, output, parameters);
         return output.toArray();
+    }
+
+    public static Dimension getImageDimension(byte[] imgData) throws IOException {
+        ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(imgData));
+        Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+        while (readers.hasNext()) {
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(iis);
+                int width = reader.getWidth(reader.getMinIndex());
+                int height = reader.getHeight(reader.getMinIndex());
+                return new Dimension(width, height);
+            } catch (IOException ignore) {
+                iis.reset();
+            } finally {
+                iis.close();
+                reader.dispose();
+            }
+        }
+
+        throw new IOException("Not a known image file");
     }
 }

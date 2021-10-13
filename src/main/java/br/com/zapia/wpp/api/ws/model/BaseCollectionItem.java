@@ -5,11 +5,17 @@ import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
-public abstract class BaseCollectionItem {
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
+
+    protected static final Logger logger = Logger.getLogger(BaseCollectionItem.class.getName());
 
     protected String id;
     protected final WhatsAppClient whatsAppClient;
     protected final JsonObject jsonObject;
+    protected BaseCollection<T> selfCollection;
 
     public BaseCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
         this.whatsAppClient = whatsAppClient;
@@ -17,9 +23,17 @@ public abstract class BaseCollectionItem {
         buildFromJson();
     }
 
+    public void setSelfCollection(BaseCollection<T> selfCollection) {
+        this.selfCollection = selfCollection;
+    }
+
     //TODO: build base properties
     private void buildFromJson() {
-        build();
+        try {
+            build();
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Build CollectionItem", e);
+        }
         if (jsonObject.get("jid") != null && !jsonObject.get("jid").isJsonNull())
             id = Util.convertJidReceived(jsonObject.get("jid").getAsString());
         else if (jsonObject.get("id") != null && !jsonObject.get("id").isJsonNull())
@@ -29,11 +43,11 @@ public abstract class BaseCollectionItem {
     abstract void build();
 
     //TODO: update base properties
-    public final void updateFromOther(BaseCollectionItem baseCollectionItem) {
+    public final void updateFromOther(T baseCollectionItem) {
         update(baseCollectionItem);
     }
 
-    abstract void update(BaseCollectionItem baseCollectionItem);
+    abstract void update(T baseCollectionItem);
 
     abstract void update(JsonElement jsonElement);
 
