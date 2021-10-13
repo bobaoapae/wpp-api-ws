@@ -13,9 +13,9 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
     protected static final Logger logger = Logger.getLogger(BaseCollectionItem.class.getName());
 
     protected String id;
-    protected final WhatsAppClient whatsAppClient;
-    protected final JsonObject jsonObject;
-    protected BaseCollection<T> selfCollection;
+    protected transient final WhatsAppClient whatsAppClient;
+    protected transient final JsonObject jsonObject;
+    protected transient BaseCollection<T> selfCollection;
 
     public BaseCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
         this.whatsAppClient = whatsAppClient;
