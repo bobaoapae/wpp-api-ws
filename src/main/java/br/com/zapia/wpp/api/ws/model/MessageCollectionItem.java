@@ -79,7 +79,7 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
 
     public static abstract class MessageContent {
 
-        protected final MessageCollectionItem messageCollectionItem;
+        protected transient final MessageCollectionItem messageCollectionItem;
         private final MessageType messageType;
 
         protected MessageContent(MessageCollectionItem messageCollectionItem, MessageType messageType) {
