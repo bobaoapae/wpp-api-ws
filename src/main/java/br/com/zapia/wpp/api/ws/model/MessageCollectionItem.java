@@ -236,5 +236,13 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
             this.duration = jsonObject.get("seconds").getAsInt();
             this.thumbnail = jsonObject.get("jpegThumbnail").getAsString();
         }
+
+        public int getDuration() {
+            return duration;
+        }
+
+        public String getThumbnail() {
+            return thumbnail;
+        }
     }
 }
