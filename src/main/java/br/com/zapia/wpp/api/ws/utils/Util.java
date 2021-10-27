@@ -302,4 +302,13 @@ public class Util {
     public static boolean isStringNullOrEmpty(String value) {
         return value == null || value.isEmpty();
     }
+
+    public static boolean isJsonArrayByteArray(JsonArray jsonArray) {
+        try {
+            Util.GSON.fromJson(jsonArray, byte[].class);
+            return true;
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
 }

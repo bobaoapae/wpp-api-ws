@@ -25,12 +25,15 @@ import ezvcard.property.Telephone;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.whispersystems.curve25519.Curve25519;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -220,7 +223,7 @@ public class WhatsAppClient extends WebSocketClient {
         collections.put(ContactCollection.class, new ContactCollection(this));
     }
 
-    public <T extends BaseCollection<? extends BaseCollectionItem>> T getCollection(Class<T> collectionType) {
+    public <T extends BaseCollection<? extends BaseCollectionItem<?>>> T getCollection(Class<T> collectionType) {
         var collection = collections.get(collectionType);
         if (collection != null)
             return collectionType.cast(collection);
@@ -388,6 +391,41 @@ public class WhatsAppClient extends WebSocketClient {
         return sendJson(Util.GSON.toJson(query), JsonElement.class);
     }
 
+    public CompletableFuture<JsonElement> updateProfilePicture(File file) {
+        try {
+            return updateProfilePicture(Util.encodeFile(file));
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "UpdateProfilePicture", e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    public CompletableFuture<JsonElement> updateProfilePicture(String base64Picture) {
+        try {
+            var msgTag = generateMessageTag(false);
+
+
+            var actionQuery = new JSONArray();
+            actionQuery
+                    .put("action")
+                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new JSONArray().put(
+                            new JSONArray()
+                                    .put("picture")
+                                    .put(new JSONObject().put("jid", Util.convertJidToSend(authInfo.getWid())).put("id", msgTag).put("type", "set"))
+                                    .put(
+                                            new JSONArray()
+                                                    .put(new JSONArray().put("image").put(JSONObject.NULL).put(Util.scaleImage(Base64.getDecoder().decode(base64Picture), 640, 640)))
+                                                    .put(new JSONArray().put("preview").put(JSONObject.NULL).put(Util.scaleImage(Base64.getDecoder().decode(base64Picture), 96, 96)))
+                                    )
+                    ));
+            return sendBinary(msgTag, Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.picture, BinaryConstants.WA.WAFlag.other), JsonElement.class);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "UpdateProfilePicture", e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
     public CompletableFuture<List<MessageCollectionItem>> loadMessages(String jid, int count, MessageCollectionItem lastMessage) {
         String index = null;
         String fromMe = null;
@@ -414,14 +452,14 @@ public class WhatsAppClient extends WebSocketClient {
 
                         for (MessageCollectionItem messageCollectionItem : messagesList) {
                             if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem)) {
-                                logger.log(Level.WARNING, "Fail on add received message to collection: " + messageCollectionItem.getId());
+                                logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
                                 throw new RuntimeException("Fail on add received message to collection: " + messageCollectionItem.getId());
                             }
                             chat.addMessage(messageCollectionItem);
                         }
 
                     } catch (Exception e) {
-                        logger.log(Level.WARNING, "LoadMessages", e);
+                        logger.log(Level.SEVERE, "LoadMessages", e);
                     }
                     return messagesList;
                 });
@@ -782,7 +820,7 @@ public class WhatsAppClient extends WebSocketClient {
                     } catch (Exception e) {
                         var isLast = host.equals(mediaConn.getHosts()[mediaConn.getHosts().length - 1]);
                         var append = isLast ? "" : ", retrying...";
-                        logger.log(Level.WARNING, "Error uploading media to {" + host.getHostname() + "}" + append, e);
+                        logger.log(Level.SEVERE, "Error uploading media to {" + host.getHostname() + "}" + append, e);
                     }
                 }
 
@@ -1095,7 +1133,7 @@ public class WhatsAppClient extends WebSocketClient {
                                                 switch (addType) {
                                                     case "relay": {
                                                         if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
-                                                            logger.log(Level.WARNING, "Fail on add received message to collection: " + messageCollectionItem.getId());
+                                                            logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
                                                         runOnSync(() -> {
                                                             if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
                                                                 getCollection(ChatCollection.class).getItem(messageCollectionItem.getRemoteJid()).addMessage(messageCollectionItem);
@@ -1107,7 +1145,7 @@ public class WhatsAppClient extends WebSocketClient {
                                                     case "update": {
                                                         runOnSync(() -> {
                                                             if (!getCollection(MessageCollection.class).changeItem(messageCollectionItem.getId(), messageCollectionItem))
-                                                                logger.log(Level.WARNING, "Fail on update received message: " + messageCollectionItem.getId());
+                                                                logger.log(Level.SEVERE, "Fail on update received message: " + messageCollectionItem.getId());
                                                         });
                                                         break;
                                                     }
@@ -1123,7 +1161,7 @@ public class WhatsAppClient extends WebSocketClient {
                                                     var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
                                                     runOnSync(() -> {
                                                         if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
-                                                            logger.log(Level.WARNING, "Fail on add received last message to collection: " + messageCollectionItem.getId());
+                                                            logger.log(Level.SEVERE, "Fail on add received last message to collection: " + messageCollectionItem.getId());
                                                         if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
                                                             getCollection(ChatCollection.class).getItem(messageCollectionItem.getRemoteJid()).setLastMessage(messageCollectionItem);
                                                         else
@@ -1204,14 +1242,14 @@ public class WhatsAppClient extends WebSocketClient {
                             switch (cmd) {
                                 case "ack":
                                     if (!getCollection(MessageCollection.class).changeItem(content.get("id").getAsString(), content))
-                                        logger.log(Level.WARNING, "Fail on update received message: " + content.get("id").getAsString());
+                                        logger.log(Level.SEVERE, "Fail on update received message: " + content.get("id").getAsString());
                                     break;
                                 case "acks":
                                     var ids = content.getAsJsonArray("id");
                                     for (int i = 0; i < ids.size(); i++) {
                                         var id = ids.get(i).getAsString();
                                         if (!getCollection(MessageCollection.class).changeItem(id, content))
-                                            logger.log(Level.WARNING, "Fail on update received message: " + id);
+                                            logger.log(Level.SEVERE, "Fail on update received message: " + id);
                                     }
                                     break;
                                 default:
@@ -1230,7 +1268,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
-        logger.log(Level.WARNING, "Ws Disconnected with code: {" + code + "} and reason: {" + reason + "}");
+        logger.log(Level.SEVERE, "Ws Disconnected with code: {" + code + "} and reason: {" + reason + "}");
         synchronized (scheduledFutures) {
             for (var scheduledFuture : scheduledFutures) {
                 if (!scheduledFuture.isCancelled())

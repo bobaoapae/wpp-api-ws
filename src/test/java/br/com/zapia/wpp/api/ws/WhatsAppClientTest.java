@@ -246,6 +246,13 @@ class WhatsAppClientTest {
         assertNotNull(profilePic);
     }
 
+    @Order(27)
+    @Test
+    public void updateProfilePic() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.updateProfilePicture(new File("profile.jpg")).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+    }
+
 
     @Order(99)
     @Test

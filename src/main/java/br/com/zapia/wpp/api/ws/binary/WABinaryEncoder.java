@@ -140,7 +140,7 @@ public class WABinaryEncoder {
             var jsonArray = jsonElement.getAsJsonArray();
             if (jsonArray.size() > 0) {
                 var firstElement = jsonArray.get(0);
-                if (firstElement.isJsonPrimitive()) {
+                if (firstElement.isJsonPrimitive() && Util.isJsonArrayByteArray(jsonArray)) {
                     var byteArray = Util.GSON.fromJson(jsonArray, byte[].class);
                     writeByteLength(byteArray.length);
                     pushBytes(byteArray);
