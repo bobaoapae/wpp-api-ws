@@ -54,4 +54,8 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
     public String getId() {
         return id;
     }
+
+    public JsonObject getJsonObject() {
+        return jsonObject;
+    }
 }

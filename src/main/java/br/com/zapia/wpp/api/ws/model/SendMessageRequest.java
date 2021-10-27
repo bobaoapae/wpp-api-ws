@@ -14,7 +14,7 @@ public class SendMessageRequest {
     private MessageType messageType;
     private String webSite;
     private FileSend file;
-    private String quotedMsg;
+    private MessageCollectionItem quotedMsg;
     private String text;
     private VCard vCard;
     private Location location;
@@ -25,7 +25,7 @@ public class SendMessageRequest {
     public SendMessageRequest() {
     }
 
-    public SendMessageRequest(MessageType messageType, FileSend file, String quotedMsg, String text, VCard vCard, Location location, String[] mentionedContacts, Buttons buttons, String webSite, WhatsAppList whatsAppList) {
+    public SendMessageRequest(MessageType messageType, FileSend file, MessageCollectionItem quotedMsg, String text, VCard vCard, Location location, String[] mentionedContacts, Buttons buttons, String webSite, WhatsAppList whatsAppList) {
         this.messageType = messageType;
         this.webSite = webSite;
         this.file = file;
@@ -50,7 +50,7 @@ public class SendMessageRequest {
         return file;
     }
 
-    public String getQuotedMsg() {
+    public MessageCollectionItem getQuotedMsg() {
         return quotedMsg;
     }
 
@@ -83,7 +83,7 @@ public class SendMessageRequest {
         private MessageType messageType;
         private String webSite;
         private FileSend file;
-        private String quotedMsg;
+        private MessageCollectionItem quotedMsg;
         private String text;
         private VCard vCard;
         private Location location;
@@ -127,8 +127,8 @@ public class SendMessageRequest {
             return this;
         }
 
-        public Builder withQuotedMsg(String messageId) {
-            this.quotedMsg = messageId;
+        public Builder withQuotedMsg(MessageCollectionItem quotedMsg) {
+            this.quotedMsg = quotedMsg;
             return this;
         }
 

@@ -16,6 +16,7 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
 
     private boolean fromMe;
     private String remoteJid;
+    private String participant;
     private AckType ackType;
     private LocalDateTime timeStamp;
     private MessageContent messageContent;
@@ -30,6 +31,10 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
 
     public String getRemoteJid() {
         return remoteJid;
+    }
+
+    public String getParticipant() {
+        return participant;
     }
 
     public AckType getAckType() {
@@ -49,6 +54,8 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
         var messageKey = jsonObject.get("key").getAsJsonObject();
         id = messageKey.get("id").getAsString();
         remoteJid = Util.convertJidReceived(messageKey.get("remoteJid").getAsString());
+        if (messageKey.has("participant"))
+            participant = Util.convertJidReceived(messageKey.get("participant").getAsString());
         fromMe = messageKey.get("fromMe").getAsBoolean();
         if (jsonObject.has("status"))
             ackType = AckType.valueOf(jsonObject.get("status").getAsString().toUpperCase());

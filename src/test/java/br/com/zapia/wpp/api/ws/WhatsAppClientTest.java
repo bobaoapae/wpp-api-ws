@@ -49,6 +49,8 @@ class WhatsAppClientTest {
             onConnect.complete(null);
         }).withOnAuthInfo(authInfo1 -> {
             onAuthInfo.complete(authInfo1);
+        }).withOnChangeDriverState(driverState -> {
+            System.out.println(driverState);
         }).builder();
         whatsAppClient.connect();
     }
@@ -208,31 +210,40 @@ class WhatsAppClientTest {
 
     @Order(21)
     @Test
-    public void sendPresenceOnline() throws InterruptedException, ExecutionException, TimeoutException {
-        var response = whatsAppClient.sendPresence(PresenceType.AVAILABLE).get(60, TimeUnit.SECONDS);
-        assertNotNull(response);
-        TimeUnit.SECONDS.sleep(5);
+    public void sendQuotedMessage() throws InterruptedException, ExecutionException, TimeoutException {
+        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").withQuotedMsg(msgReceived).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(22)
     @Test
-    public void sendChatComposing() throws InterruptedException {
-        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.COMPOSING);
-        TimeUnit.SECONDS.sleep(5);
+    public void sendPresenceOnline() throws InterruptedException, ExecutionException, TimeoutException {
+        var response = whatsAppClient.sendPresence(PresenceType.AVAILABLE).get(60, TimeUnit.SECONDS);
+        assertNotNull(response);
     }
 
     @Order(23)
     @Test
-    public void sendChatRecording() throws InterruptedException {
-        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.RECORDING);
-        TimeUnit.SECONDS.sleep(5);
+    public void sendChatComposing() throws InterruptedException {
+        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.COMPOSING);
     }
 
     @Order(24)
     @Test
+    public void sendChatRecording() throws InterruptedException {
+        whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.RECORDING);
+    }
+
+    @Order(25)
+    @Test
     public void sendChatPaused() throws InterruptedException {
         whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.PAUSED);
-        TimeUnit.SECONDS.sleep(5);
+    }
+
+    @Order(26)
+    @Test
+    public void getProfilePic() throws InterruptedException, ExecutionException, TimeoutException {
+        var profilePic = whatsAppClient.findProfilePicture(chatCollectionItem.getId()).get(30, TimeUnit.SECONDS);
+        assertNotNull(profilePic);
     }
 
 

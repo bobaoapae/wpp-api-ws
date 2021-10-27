@@ -7,6 +7,8 @@ import br.com.zapia.wpp.api.ws.binary.protos.*;
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.model.communication.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.hash.Hashing;
 import com.google.common.primitives.Bytes;
 import com.google.gson.*;
@@ -36,6 +38,7 @@ import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -60,10 +63,13 @@ public class WhatsAppClient extends WebSocketClient {
     private final Consumer<String> onQrCode;
     private final Runnable onConnect;
     private final Consumer<AuthInfo> onAuthInfo;
+    private final Consumer<DriverState> onChangeDriverState;
 
     private final Object syncTag;
     private final Object syncIsSynced;
-    private final Map<Class<? extends BaseCollection<? extends BaseCollectionItem>>, BaseCollection<? extends BaseCollectionItem>> collections;
+    private final Object syncPresence;
+    private final Map<Class<? extends BaseCollection<? extends BaseCollectionItem<?>>>, BaseCollection<? extends BaseCollectionItem<?>>> collections;
+    private final AsyncLoadingCache<String, CheckNumberExistResponse> cacheNumberExist;
     private final List<ScheduledFuture<?>> scheduledFutures;
     private final Map<String, CompletableFuture<JsonElement>> wsEvents;
     private final List<Runnable> runnableOnConnect;
@@ -74,18 +80,22 @@ public class WhatsAppClient extends WebSocketClient {
     private CommunicationKeys communicationKeys;
     private String lastQrCode;
 
+    private DriverState driverState;
     private int msgCount;
     private LocalDateTime lastSeen;
+    private LocalDateTime lastSendPresence;
+    private PresenceType lastPresenceType;
     private MediaConnResponse.MediaConn cacheMediaConnResponse;
     private ScheduledFuture<?> refreshQrCodeScheduler;
     private ScheduledFuture<?> keepAliveScheduled;
 
-    public WhatsAppClient(AuthInfo authInfo, Consumer<String> onQrCode, Runnable onConnect, Consumer<AuthInfo> onAuthInfo, Function<Runnable, Runnable> runnableFactory, Function<Callable, Callable> callableFactory, Function<Runnable, Thread> threadFactory, ExecutorService executorService, ScheduledExecutorService scheduledExecutorService) {
+    public WhatsAppClient(AuthInfo authInfo, Consumer<String> onQrCode, Runnable onConnect, Consumer<AuthInfo> onAuthInfo, Consumer<DriverState> onChangeDriverState, Function<Runnable, Runnable> runnableFactory, Function<Callable, Callable> callableFactory, Function<Runnable, Thread> threadFactory, ExecutorService executorService, ScheduledExecutorService scheduledExecutorService) {
         super(URI.create(Constants.WS_URL));
         this.authInfo = authInfo;
         this.onQrCode = onQrCode;
         this.onConnect = onConnect;
         this.onAuthInfo = onAuthInfo;
+        this.onChangeDriverState = onChangeDriverState;
         this.runnableFactory = runnableFactory;
         this.callableFactory = callableFactory;
         this.threadFactory = threadFactory;
@@ -95,9 +105,15 @@ public class WhatsAppClient extends WebSocketClient {
         this.wsEvents = new ConcurrentHashMap<>();
         this.scheduledFutures = new ArrayList<>();
         this.collections = new HashMap<>();
+        this.cacheNumberExist = Caffeine.newBuilder()
+                .maximumSize(10_000)
+                .expireAfterWrite(Duration.ofMinutes(5))
+                .buildAsync(number -> sendJson(new CheckNumberExistRequest(number).toJson(), CheckNumberExistResponse.class).get());
         this.runnableOnConnect = new ArrayList<>();
         this.isSynced = new AtomicBoolean(false);
         this.syncIsSynced = new Object();
+        this.syncPresence = new Object();
+        setDriverState(DriverState.UNLOADED);
         setConnectionLostTimeout(0);
         getHeadersConnectWs().forEach(this::addHeader);
     }
@@ -222,7 +238,7 @@ public class WhatsAppClient extends WebSocketClient {
                 authInfo = new AuthInfo();
                 authInfo.setClientId(clientId);
             }
-            startKeepAlive();
+            //startKeepAlive();
             sendInit().thenAccept(initResponse -> {
                 if (initResponse.getStatus() == 200) {
                     serverId = initResponse.getRef();
@@ -247,19 +263,69 @@ public class WhatsAppClient extends WebSocketClient {
                             }
                         });
                     }
+                } else {
+                    logger.log(Level.SEVERE, "Init returned unexpected status: " + initResponse.getStatus());
+                    close(CloseFrame.ABNORMAL_CLOSE, "Init returned unexpected status: " + initResponse.getStatus());
                 }
             });
         } catch (Exception e) {
             logger.log(Level.SEVERE, "InitLogin", e);
+            close(CloseFrame.ABNORMAL_CLOSE, "A error was occurred on initLogin, check logs to find the reason");
         }
     }
 
     private CompletableFuture<InitResponse> sendInit() {
+        setDriverState(DriverState.INITIALIZING);
         return sendJson(new InitRequest(authInfo.getClientId()).toJson(), InitResponse.class);
     }
 
+    public CompletableFuture<JsonElement> sendPresence(PresenceType presenceType) {
+        synchronized (syncPresence) {
+            if (lastSendPresence == null)
+                lastSendPresence = LocalDateTime.now();
+
+            if (presenceType == lastPresenceType && lastSendPresence.plusSeconds(15).isBefore(LocalDateTime.now())) {
+                var fakeJsonResponse = new JsonObject();
+                fakeJsonResponse.addProperty("status", 429);
+                return CompletableFuture.completedFuture(fakeJsonResponse);
+            }
+
+            lastPresenceType = presenceType;
+            lastSendPresence = LocalDateTime.now();
+
+            var childs = new JsonArray();
+            var child = new JsonArray();
+            var data = new JsonObject();
+            data.addProperty("type", presenceType.name().toLowerCase());
+            child.add("presence");
+            child.add(data);
+            child.add(JsonNull.INSTANCE);
+            childs.add(child);
+            return sendBinary(new BaseAction("set", String.valueOf(msgCount), childs).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.presence, BinaryConstants.WA.WAFlag.ignore), JsonElement.class);
+        }
+    }
+
+    public void sendChatPresenceUpdate(String jid, PresenceType presenceType) {
+        switch (presenceType) {
+            case AVAILABLE, UNAVAILABLE -> {
+                logger.log(Level.WARNING, "Invalid Presence Type: " + presenceType);
+                throw new IllegalStateException("Invalid Presence Type: " + presenceType);
+            }
+        }
+        var childs = new JsonArray();
+        var child = new JsonArray();
+        var data = new JsonObject();
+        data.addProperty("type", presenceType.name().toLowerCase());
+        data.addProperty("to", Util.convertJidToSend(jid));
+        child.add("presence");
+        child.add(data);
+        child.add(JsonNull.INSTANCE);
+        childs.add(child);
+        sendBinary(new BaseAction("set", String.valueOf(msgCount), childs).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.presence, BinaryConstants.WA.WAFlag.valueOf(presenceType.name().toLowerCase())), JsonElement.class);
+    }
+
     public CompletableFuture<CheckNumberExistResponse> checkNumberExist(String number) {
-        return sendJson(new CheckNumberExistRequest(number).toJson(), CheckNumberExistResponse.class);
+        return cacheNumberExist.get(number);
     }
 
     public CompletableFuture<ChatCollectionItem> findChatFromNumber(String number) {
@@ -312,6 +378,14 @@ public class WhatsAppClient extends WebSocketClient {
             logger.log(Level.WARNING, "Fail on add contact to collection: " + id);
 
         return CompletableFuture.completedFuture(contact);
+    }
+
+    public CompletableFuture<JsonElement> findProfilePicture(String jid) {
+        var query = new JsonArray();
+        query.add("query");
+        query.add("ProfilePicThumb");
+        query.add(Util.convertJidToSend(jid));
+        return sendJson(Util.GSON.toJson(query), JsonElement.class);
     }
 
     public CompletableFuture<List<MessageCollectionItem>> loadMessages(String jid, int count, MessageCollectionItem lastMessage) {
@@ -415,9 +489,38 @@ public class WhatsAppClient extends WebSocketClient {
     private CompletableFuture<Message.Builder> prepareMessageContent(SendMessageRequest messageSend) {
         try {
             var msgBuilder = Message.newBuilder();
+            ContextInfo.Builder contextInfo = null;
+            if (messageSend.getQuotedMsg() != null) {
+                try {
+                    contextInfo = ContextInfo.newBuilder();
+                    if (messageSend.getQuotedMsg().isFromMe()) {
+                        contextInfo.setParticipant(authInfo.getWid());
+                    } else if (!Util.isStringNullOrEmpty(messageSend.getQuotedMsg().getParticipant())) {
+                        contextInfo.setParticipant(messageSend.getQuotedMsg().getParticipant());
+                        contextInfo.setRemoteJid(Util.convertJidToSend(messageSend.getQuotedMsg().getRemoteJid()));
+                    } else {
+                        contextInfo.setParticipant(Util.convertJidToSend(messageSend.getQuotedMsg().getRemoteJid()));
+                    }
+                    contextInfo.setStanzaId(messageSend.getQuotedMsg().getId());
+                    var quotedMessageBuilder = WebMessageInfo.newBuilder();
+                    JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(messageSend.getQuotedMsg().getJsonObject()), quotedMessageBuilder);
+                    var msg = quotedMessageBuilder.build();
+                    contextInfo.setQuotedMessage(msg.getMessage());
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Prepare quoted message to reply", e);
+                }
+            }
             switch (messageSend.getMessageType()) {
                 case TEXT: {
-                    msgBuilder.setConversation(messageSend.getText());
+                    if (contextInfo == null) {
+                        msgBuilder.setConversation(messageSend.getText());
+                    } else {
+                        var extendedTextBuilder = ExtendedTextMessage.newBuilder();
+                        extendedTextBuilder
+                                .setText(messageSend.getText())
+                                .setContextInfo(contextInfo);
+                        msgBuilder.setExtendedTextMessage(extendedTextBuilder);
+                    }
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
                 case LOCATION:
@@ -427,6 +530,9 @@ public class WhatsAppClient extends WebSocketClient {
                             .setDegreesLatitude(messageSend.getLocation().getLat())
                             .setDegreesLongitude(messageSend.getLocation().getLng())
                             .setAddress(messageSend.getLocation().getName());
+                    if (contextInfo != null) {
+                        locationMsgBuilder.setContextInfo(contextInfo);
+                    }
                     msgBuilder.setLocationMessage(locationMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
@@ -450,6 +556,9 @@ public class WhatsAppClient extends WebSocketClient {
                     contactMsgBuilder
                             .setVcard(vcardStr)
                             .setDisplayName(vcard.getFormattedName().getValue());
+                    if (contextInfo != null) {
+                        contactMsgBuilder.setContextInfo(contextInfo);
+                    }
                     msgBuilder.setContactMessage(contactMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
@@ -463,6 +572,9 @@ public class WhatsAppClient extends WebSocketClient {
                             .setContentText(messageSend.getButtons().getTitle())
                             .setHeaderType(ButtonsMessage.ButtonsMessageHeaderType.TEXT);
                     buttonsMsgBuilder.setText(messageSend.getText() == null || messageSend.getText().isEmpty() ? " " : messageSend.getText());
+                    if (contextInfo != null) {
+                        buttonsMsgBuilder.setContextInfo(contextInfo);
+                    }
                     msgBuilder.setButtonsMessage(buttonsMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
@@ -485,6 +597,9 @@ public class WhatsAppClient extends WebSocketClient {
                             .setDescription(messageSend.getWhatsAppList().getDescription())
                             .setFooterText(messageSend.getWhatsAppList().getFooter())
                             .setButtonText(messageSend.getWhatsAppList().getButtonText());
+                    if (contextInfo != null) {
+                        listMsgBuilder.setContextInfo(contextInfo);
+                    }
                     msgBuilder.setListMessage(listMsgBuilder);
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
@@ -493,7 +608,7 @@ public class WhatsAppClient extends WebSocketClient {
                 case VIDEO:
                 case AUDIO:
                 case STICKER:
-                    return prepareMessageMedia(msgBuilder, messageSend).thenApply(otherMsgBuilder -> otherMsgBuilder);
+                    return prepareMessageMedia(msgBuilder, messageSend, contextInfo).thenApply(otherMsgBuilder -> otherMsgBuilder);
                 default: {
                     logger.log(Level.SEVERE, "Unsupported message type to send: {" + messageSend.getMessageType() + "}");
                     return CompletableFuture.failedFuture(new Exception("Unsupported message type to send: {" + messageSend.getMessageType() + "}"));
@@ -505,7 +620,7 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
-    private CompletableFuture<Message.Builder> prepareMessageMedia(Message.Builder msgBuilder, SendMessageRequest messageSend) {
+    private CompletableFuture<Message.Builder> prepareMessageMedia(Message.Builder msgBuilder, SendMessageRequest messageSend, ContextInfo.Builder contextInfo) {
         if (messageSend.getMessageType() == MessageType.STICKER && messageSend.getText() != null && !messageSend.getText().isEmpty()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Cannot send caption with a sticker"));
         }
@@ -570,6 +685,9 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
                                             .setFileLength(encryptedStream.getFileLength())
                                             .setFileName(messageSend.getFile().getFileName());
+                                    if (contextInfo != null) {
+                                        documentBuilder.setContextInfo(contextInfo);
+                                    }
                                     msgBuilder.setDocumentMessage(documentBuilder);
                                     break;
                                 }
@@ -588,6 +706,9 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setHeight((int) dimension.getHeight())
                                             .setWidth((int) dimension.getWidth())
                                             .setJpegThumbnail(ByteString.copyFrom(Util.generateThumbnail(streamFile, messageSend.getMessageType())));
+                                    if (contextInfo != null) {
+                                        imageBuilder.setContextInfo(contextInfo);
+                                    }
                                     msgBuilder.setImageMessage(imageBuilder);
                                     break;
                                 }
@@ -605,6 +726,9 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setSeconds(Util.getMediaDuration(streamFile))
                                             .setGifPlayback(messageSend.getFile().isForceGif())
                                             .setJpegThumbnail(ByteString.copyFrom(Util.generateThumbnail(streamFile, messageSend.getMessageType())));
+                                    if (contextInfo != null) {
+                                        videoBuilder.setContextInfo(contextInfo);
+                                    }
                                     msgBuilder.setVideoMessage(videoBuilder);
                                     break;
                                 }
@@ -621,6 +745,9 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setFileLength(encryptedStream.getFileLength())
                                             .setSeconds(Util.getMediaDuration(streamFile))
                                             .setPtt(messageSend.getFile().isForcePtt());
+                                    if (contextInfo != null) {
+                                        audioBuilder.setContextInfo(contextInfo);
+                                    }
                                     msgBuilder.setAudioMessage(audioBuilder);
                                     break;
                                 }
@@ -636,6 +763,9 @@ public class WhatsAppClient extends WebSocketClient {
                                             .setFileSha256(ByteString.copyFrom(encryptedStream.getSha256Plain()))
                                             .setFileLength(encryptedStream.getFileLength())
                                             .setPngThumbnail(ByteString.copyFrom(Util.generateThumbnail(Base64.getDecoder().decode(messageSend.getFile().getEncodedFile()), messageSend.getMessageType())));
+                                    if (contextInfo != null) {
+                                        stickerBuilder.setContextInfo(contextInfo);
+                                    }
                                     msgBuilder.setStickerMessage(stickerBuilder);
                                     break;
                                 }
@@ -700,6 +830,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     private void initNewSession() {
         try {
+            setDriverState(DriverState.INIT_NEW_SESSION);
             var keyPair = CURVE_25519.generateKeyPair();
             authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
             authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
@@ -710,6 +841,7 @@ public class WhatsAppClient extends WebSocketClient {
     }
 
     private CompletableFuture<LoginResponse> sendLogin() {
+        setDriverState(DriverState.RESTORING_OLD_SESSION);
         return sendJson(new LoginRequest(authInfo).toJson(), LoginResponse.class);
     }
 
@@ -721,9 +853,11 @@ public class WhatsAppClient extends WebSocketClient {
             var outputStream = new ByteArrayOutputStream();
             MatrixToImageWriter.writeToStream(bitMatrix, "png", outputStream);
             lastQrCode = "data:image/png;base64," + Base64.getEncoder().encodeToString(outputStream.toByteArray());
-            executorService.submit(runnableFactory.apply(() -> {
-                onQrCode.accept(lastQrCode);
-            }));
+            if (onQrCode != null) {
+                executorService.submit(runnableFactory.apply(() -> {
+                    onQrCode.accept(lastQrCode);
+                }));
+            }
         } catch (Exception e) {
             logger.log(Level.SEVERE, "GenerateQrCode", e);
             close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to error on generate QrCode");
@@ -736,6 +870,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     //See WhatsApp Web {openStream} function
     private CompletableFuture<Void> syncCollections() {
+        setDriverState(DriverState.WAITING_SYNC);
         var chat = getCollection(ChatCollection.class).sync();
         var contact = getCollection(ContactCollection.class).sync();
         return chat.thenCompose(unused -> contact);
@@ -745,37 +880,6 @@ public class WhatsAppClient extends WebSocketClient {
          *                 sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), null);
          *             }
          */
-    }
-
-    public CompletableFuture<JsonElement> sendPresence(PresenceType presenceType) {
-        var childs = new JsonArray();
-        var child = new JsonArray();
-        var data = new JsonObject();
-        data.addProperty("type", presenceType.name().toLowerCase());
-        child.add("presence");
-        child.add(data);
-        child.add(JsonNull.INSTANCE);
-        childs.add(child);
-        return sendBinary(new BaseAction("set", String.valueOf(msgCount), childs).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.presence, BinaryConstants.WA.WAFlag.ignore), JsonElement.class);
-    }
-
-    public void sendChatPresenceUpdate(String jid, PresenceType presenceType) {
-        switch (presenceType) {
-            case AVAILABLE, UNAVAILABLE -> {
-                logger.log(Level.WARNING, "Invalid Presence Type: " + presenceType);
-                throw new IllegalStateException("Invalid Presence Type: " + presenceType);
-            }
-        }
-        var childs = new JsonArray();
-        var child = new JsonArray();
-        var data = new JsonObject();
-        data.addProperty("type", presenceType.name().toLowerCase());
-        data.addProperty("to", Util.convertJidToSend(jid));
-        child.add("presence");
-        child.add(data);
-        child.add(JsonNull.INSTANCE);
-        childs.add(child);
-        sendBinary(new BaseAction("set", String.valueOf(msgCount), childs).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.presence, BinaryConstants.WA.WAFlag.valueOf(presenceType.name().toLowerCase())), JsonElement.class);
     }
 
     private void generateCommunicationKeys() {
@@ -837,13 +941,18 @@ public class WhatsAppClient extends WebSocketClient {
                     for (ChatCollectionItem chatItem : getCollection(ChatCollection.class).getAllItems()) {
 
                     }
-                    onConnect.run();
+                    if (onConnect != null) {
+                        onConnect.run();
+                    }
+                    setDriverState(DriverState.CONNECTED);
                 });
             }));
 
-            executorService.submit(runnableFactory.apply(() -> {
-                onAuthInfo.accept(authInfo);
-            }));
+            if (onAuthInfo != null) {
+                executorService.submit(runnableFactory.apply(() -> {
+                    onAuthInfo.accept(authInfo);
+                }));
+            }
 
         } catch (Exception e) {
             logger.log(Level.SEVERE, "GenerateCommunicationKeys", e);
@@ -870,12 +979,31 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
+    public DriverState getDriverState() {
+        return driverState;
+    }
+
+    public void setDriverState(DriverState driverState) {
+        this.driverState = driverState;
+        if (onChangeDriverState != null) {
+            executorService.submit(runnableFactory.apply(() -> {
+                onChangeDriverState.accept(driverState);
+            }));
+        }
+    }
+
     public int getMsgCount() {
         return msgCount;
     }
 
     public String getLastQrCode() {
         return lastQrCode;
+    }
+
+    @Override
+    public void connect() {
+        super.connect();
+        setDriverState(DriverState.CONNECTING);
     }
 
     @Override

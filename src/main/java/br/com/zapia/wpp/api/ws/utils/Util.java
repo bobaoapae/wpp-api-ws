@@ -298,4 +298,8 @@ public class Util {
 
         throw new IOException("Not a known image file");
     }
+
+    public static boolean isStringNullOrEmpty(String value) {
+        return value == null || value.isEmpty();
+    }
 }

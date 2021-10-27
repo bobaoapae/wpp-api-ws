@@ -1,16 +1,14 @@
 package br.com.zapia.wpp.api.ws;
 
 import br.com.zapia.wpp.api.ws.model.AuthInfo;
+import br.com.zapia.wpp.api.ws.model.DriverState;
 
-import java.awt.image.BufferedImage;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 public class WhatsAppClientBuilder {
 
@@ -21,6 +19,7 @@ public class WhatsAppClientBuilder {
     private Function<Runnable, Thread> threadFactory;
     private Consumer<String> onQrCode;
     private Consumer<AuthInfo> onAuthInfo;
+    private Consumer<DriverState> onChangeDriverState;
     private Runnable onConnect;
     private AuthInfo authInfo;
 
@@ -77,7 +76,12 @@ public class WhatsAppClientBuilder {
         return this;
     }
 
+    public WhatsAppClientBuilder withOnChangeDriverState(Consumer<DriverState> onChangeDriverState) {
+        this.onChangeDriverState = onChangeDriverState;
+        return this;
+    }
+
     public WhatsAppClient builder() {
-        return new WhatsAppClient(authInfo, onQrCode, onConnect, onAuthInfo, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
+        return new WhatsAppClient(authInfo, onQrCode, onConnect, onAuthInfo, onChangeDriverState, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
     }
 }
