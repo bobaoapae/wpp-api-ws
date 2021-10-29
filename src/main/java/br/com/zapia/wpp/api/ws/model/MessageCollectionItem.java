@@ -19,6 +19,7 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
     private String participant;
     private AckType ackType;
     private LocalDateTime timeStamp;
+    private boolean starred;
     private MessageContent messageContent;
 
     public MessageCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
@@ -41,6 +42,10 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
         return ackType;
     }
 
+    public boolean isStarred() {
+        return starred;
+    }
+
     public LocalDateTime getTimeStamp() {
         return timeStamp;
     }
@@ -59,6 +64,8 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
         fromMe = messageKey.get("fromMe").getAsBoolean();
         if (jsonObject.has("status"))
             ackType = AckType.valueOf(jsonObject.get("status").getAsString().toUpperCase());
+        if (jsonObject.has("starred"))
+            starred = jsonObject.get("starred").getAsBoolean();
         timeStamp = LocalDateTime.ofInstant(Instant.ofEpochSecond(jsonObject.get("messageTimestamp").getAsInt()), TimeZone.getDefault().toZoneId());
         if (jsonObject.has("message"))
             messageContent = MessageContent.build(this, jsonObject.getAsJsonObject("message"));

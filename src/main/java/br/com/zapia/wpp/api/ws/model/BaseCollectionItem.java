@@ -34,9 +34,9 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Build CollectionItem", e);
         }
-        if (jsonObject.get("jid") != null && !jsonObject.get("jid").isJsonNull())
+        if (jsonObject.get("jid") != null && !jsonObject.get("jid").isJsonNull() && !jsonObject.get("jid").getAsString().isEmpty())
             id = Util.convertJidReceived(jsonObject.get("jid").getAsString());
-        else if (jsonObject.get("id") != null && !jsonObject.get("id").isJsonNull())
+        else if (jsonObject.get("id") != null && !jsonObject.get("id").isJsonNull() && !jsonObject.get("id").getAsString().isEmpty())
             id = jsonObject.get("id").getAsString();
     }
 

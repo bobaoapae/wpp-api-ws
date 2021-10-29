@@ -13,8 +13,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 @TestMethodOrder(value = MethodOrderer.OrderAnnotation.class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -28,6 +27,7 @@ class WhatsAppClientTest {
     private CompletableFuture<MessageCollectionItem> eventAddMsg;
     private CompletableFuture<MessageCollectionItem> eventUpdateMsg;
     private MessageCollectionItem msgReceived;
+    private MessageCollectionItem lastMsgSend;
 
     @Order(0)
     @Test
@@ -211,7 +211,8 @@ class WhatsAppClientTest {
     @Order(21)
     @Test
     public void sendQuotedMessage() throws InterruptedException, ExecutionException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").withQuotedMsg(msgReceived).build()).get(60, TimeUnit.SECONDS);
+        lastMsgSend = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").withQuotedMsg(msgReceived).build()).get(60, TimeUnit.SECONDS);
+        assertNotNull(lastMsgSend);
     }
 
     @Order(22)
@@ -223,19 +224,19 @@ class WhatsAppClientTest {
 
     @Order(23)
     @Test
-    public void sendChatComposing() throws InterruptedException {
+    public void sendChatComposing() {
         whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.COMPOSING);
     }
 
     @Order(24)
     @Test
-    public void sendChatRecording() throws InterruptedException {
+    public void sendChatRecording() {
         whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.RECORDING);
     }
 
     @Order(25)
     @Test
-    public void sendChatPaused() throws InterruptedException {
+    public void sendChatPaused() {
         whatsAppClient.sendChatPresenceUpdate(chatCollectionItem.getId(), PresenceType.PAUSED);
     }
 
@@ -251,6 +252,47 @@ class WhatsAppClientTest {
     public void updateProfilePic() throws InterruptedException, ExecutionException, TimeoutException {
         var result = whatsAppClient.updateProfilePicture(new File("profile.jpg")).get(30, TimeUnit.SECONDS);
         assertNotNull(result);
+    }
+
+    @Order(28)
+    @Test
+    public void revokeMessage() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.revokeMessage(lastMsgSend).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+    }
+
+
+    @Order(29)
+    @Test
+    public void deleteMessage() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.deleteMessage(msgReceived).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+    }
+
+
+    @Order(30)
+    @Test
+    public void clearChat() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.clearChat(chatCollectionItem.getId(), true).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+    }
+
+
+    @Order(31)
+    @Test
+    public void pinChat() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.pinChat(chatCollectionItem.getId()).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+        assertTrue(chatCollectionItem.getPin() > 0);
+    }
+
+
+    @Order(32)
+    @Test
+    public void unpinChat() throws InterruptedException, ExecutionException, TimeoutException {
+        var result = whatsAppClient.unPinChat(chatCollectionItem.getId()).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+        assertTrue(chatCollectionItem.getPin() <= 0);
     }
 
 

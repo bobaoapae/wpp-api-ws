@@ -46,7 +46,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -76,7 +76,7 @@ public class WhatsAppClient extends WebSocketClient {
     private final List<ScheduledFuture<?>> scheduledFutures;
     private final Map<String, CompletableFuture<JsonElement>> wsEvents;
     private final List<Runnable> runnableOnConnect;
-    private final AtomicBoolean isSynced;
+    private boolean isSynced;
 
     private String serverId;
     private AuthInfo authInfo;
@@ -113,7 +113,6 @@ public class WhatsAppClient extends WebSocketClient {
                 .expireAfterWrite(Duration.ofMinutes(5))
                 .buildAsync(number -> sendJson(new CheckNumberExistRequest(number).toJson(), CheckNumberExistResponse.class).get());
         this.runnableOnConnect = new ArrayList<>();
-        this.isSynced = new AtomicBoolean(false);
         this.syncIsSynced = new Object();
         this.syncPresence = new Object();
         setDriverState(DriverState.UNLOADED);
@@ -148,7 +147,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     private void runOnSync(Runnable runnable) {
         synchronized (syncIsSynced) {
-            if (isSynced.get()) {
+            if (isSynced) {
                 try {
                     runnable.run();
                 } catch (Exception e) {
@@ -221,6 +220,7 @@ public class WhatsAppClient extends WebSocketClient {
         collections.put(ChatCollection.class, new ChatCollection(this));
         collections.put(MessageCollection.class, new MessageCollection(this));
         collections.put(ContactCollection.class, new ContactCollection(this));
+        collections.put(QuickReplyCollection.class, new QuickReplyCollection(this));
     }
 
     public <T extends BaseCollection<? extends BaseCollectionItem<?>>> T getCollection(Class<T> collectionType) {
@@ -351,8 +351,8 @@ public class WhatsAppClient extends WebSocketClient {
             var jsonObject = new JsonObject();
             jsonObject.addProperty("jid", contactCollectionItem.getId());
             var chat = new ChatCollectionItem(this, jsonObject);
-            if (!getCollection(ChatCollection.class).tryAddItem(id, chat))
-                logger.log(Level.WARNING, "Fail on add chat to collection: " + id);
+            if (!getCollection(ChatCollection.class).tryAddItem(chat))
+                logger.log(Level.SEVERE, "Fail on add chat to collection: " + id);
 
             return chat;
         });
@@ -377,18 +377,36 @@ public class WhatsAppClient extends WebSocketClient {
         var jsonObject = new JsonObject();
         jsonObject.addProperty("jid", id);
         var contact = new ContactCollectionItem(this, jsonObject);
-        if (!getCollection(ContactCollection.class).tryAddItem(id, contact))
-            logger.log(Level.WARNING, "Fail on add contact to collection: " + id);
+        if (!getCollection(ContactCollection.class).tryAddItem(contact))
+            logger.log(Level.SEVERE, "Fail on add contact to collection: " + id);
 
         return CompletableFuture.completedFuture(contact);
     }
 
-    public CompletableFuture<JsonElement> findProfilePicture(String jid) {
+    public CompletableFuture<byte[]> findProfilePicture(String jid) {
         var query = new JsonArray();
         query.add("query");
         query.add("ProfilePicThumb");
         query.add(Util.convertJidToSend(jid));
-        return sendJson(Util.GSON.toJson(query), JsonElement.class);
+        return sendJson(Util.GSON.toJson(query), JsonObject.class).thenApply(jsonObject -> {
+            if (jsonObject.has("eurl") && !jsonObject.get("eurl").getAsString().isEmpty()) {
+                try {
+                    HttpRequest httpRequest = HttpRequest.newBuilder()
+                            .header("Origin", Constants.ORIGIN_WS)
+                            .GET()
+                            .uri(URI.create(jsonObject.get("eurl").getAsString()))
+                            .build();
+                    var client = HttpClient.newHttpClient();
+
+                    var response = client.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+                    return response.body();
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "downloadProfilePicture", e);
+                    throw new RuntimeException(e);
+                }
+            }
+            return null;
+        });
     }
 
     public CompletableFuture<JsonElement> updateProfilePicture(File file) {
@@ -426,6 +444,165 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
+    public CompletableFuture<JsonElement> clearChat(String jid, boolean includeStarred) {
+        return getChatIndex(jid).thenCompose(chatIndex -> {
+            var actionQuery = new JSONArray();
+            actionQuery
+                    .put("action")
+                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new JSONArray().put(
+                            new JSONArray()
+                                    .put("chat")
+                                    .put(chatIndex.put("jid", Util.convertJidToSend(jid)).put("type", "clear").put("star", includeStarred ? "true" : "false"))
+                                    .put(JSONObject.NULL)
+                    ));
+
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenCompose(jsonObject -> {
+                if (jsonObject.get("status").getAsInt() == 200) {
+                    return findChatFromId(jid).thenApply(chatCollectionItem -> {
+                        var lastMsgId = String.valueOf(chatIndex.get("index"));
+                        var msgsRemove = chatCollectionItem.getMessages().stream().filter(messageCollectionItem -> !messageCollectionItem.getId().equals(lastMsgId) && (!includeStarred || !messageCollectionItem.isStarred())).map(BaseCollectionItem::getId).toList().toArray(new String[0]);
+                        chatCollectionItem.removeMessages(msgsRemove);
+                        getCollection(MessageCollection.class).tryRemoveItems(msgsRemove);
+                        return jsonObject;
+                    });
+                }
+
+                return CompletableFuture.completedFuture(jsonObject);
+            });
+        });
+    }
+
+    public CompletableFuture<JsonElement> deleteMessage(MessageCollectionItem messageCollectionItem) {
+        return findChatFromId(messageCollectionItem.getRemoteJid()).thenCompose(chatCollectionItem -> {
+            var tag = Math.round(new Random().nextInt() * 1000000);
+            var actionQuery = new JSONArray();
+            actionQuery
+                    .put("action")
+                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new JSONArray().put(
+                            new JSONArray()
+                                    .put("chat")
+                                    .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("modify_tag", String.valueOf(tag)).put("type", "clear"))
+                                    .put(
+                                            new JSONArray()
+                                                    .put(new JSONArray().put("item").put(new JSONObject().put("owner", messageCollectionItem.isFromMe() ? "true" : "false").put("index", messageCollectionItem.getId())).put(JSONObject.NULL))
+                                    )
+                    ));
+
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
+                if (jsonObject.get("status").getAsInt() == 200) {
+                    chatCollectionItem.removeMessage(messageCollectionItem.getId());
+                    if (!getCollection(MessageCollection.class).tryRemoveItem(messageCollectionItem.getId())) {
+                        logger.log(Level.SEVERE, "Fail on remove message {" + messageCollectionItem.getId() + "} from chat {" + chatCollectionItem.getId() + "}");
+                    }
+                }
+                return jsonObject;
+            });
+        });
+    }
+
+    public CompletableFuture<JsonElement> revokeMessage(MessageCollectionItem messageCollectionItem) {
+        if (messageCollectionItem.isFromMe()) {
+            var protocolMessageBuilder = ProtocolMessage.newBuilder();
+            protocolMessageBuilder.setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(messageCollectionItem.getRemoteJid())).setFromMe(messageCollectionItem.isFromMe()).setId(messageCollectionItem.getId()))
+                    .setType(ProtocolMessage.ProtocolMessageType.REVOKE);
+
+            var msg = generateMessageFromContent(messageCollectionItem.getRemoteJid(), Message.newBuilder().setProtocolMessage(protocolMessageBuilder));
+
+            return relayMessage(msg);
+        }
+        return CompletableFuture.completedFuture(new JsonObject());
+    }
+
+    //TODO: generateForwardMessageContextInfo
+    /*public CompletableFuture<JsonElement> forwardMessage(String jid, MessageCollectionItem messageCollectionItem) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            var webMsgInfo = new AtomicReference<WebMessageInfo>();
+            try {
+                webMsgInfo.set(Util.convertMessageCollectionItemToWebMessageInfo(messageCollectionItem));
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "Error on convert to webMsgInfo", e);
+                return CompletableFuture.failedFuture(e);
+            }
+
+            var score = 0;
+
+        });
+    }*/
+
+    public CompletableFuture<JsonElement> pinChat(String jid) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            var pinTime = System.currentTimeMillis() / 1000L;
+            var actionQuery = new JSONArray();
+            actionQuery
+                    .put("action")
+                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new JSONArray().put(
+                            new JSONArray()
+                                    .put("chat")
+                                    .put(new JSONObject().put("jid", Util.convertJidToSend(jid)).put("type", "pin").put("pin", pinTime))
+                                    .put(JSONObject.NULL)
+                    ));
+
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
+                if (jsonObject.get("status").getAsInt() == 200) {
+                    chatCollectionItem.setPin((int) pinTime);
+                }
+                return jsonObject;
+            });
+        });
+    }
+
+    public CompletableFuture<JsonElement> unPinChat(String jid) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            var actionQuery = new JSONArray();
+            actionQuery
+                    .put("action")
+                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new JSONArray().put(
+                            new JSONArray()
+                                    .put("chat")
+                                    .put(new JSONObject().put("jid", Util.convertJidToSend(jid)).put("type", "pin").put("previous", chatCollectionItem.getPin()))
+                                    .put(JSONObject.NULL)
+                    ));
+
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
+                if (jsonObject.get("status").getAsInt() == 200) {
+                    chatCollectionItem.setPin(0);
+                }
+                return jsonObject;
+            });
+        });
+    }
+
+    private CompletableFuture<JSONObject> getChatIndex(String jid) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null) {
+                return CompletableFuture.failedFuture(new Exception("Chat not found to build chatIndex: " + jid));
+            }
+            if (chatCollectionItem.getMessages().isEmpty()) {
+                return chatCollectionItem.loadMessages(1);
+            }
+            return CompletableFuture.completedFuture(chatCollectionItem.getMessages());
+        }).thenApply(messageCollectionItems -> {
+            var lastMsg = messageCollectionItems.get(messageCollectionItems.size() - 1);
+
+            var jsonObject = new JSONObject().put("index", lastMsg.getId()).put("owner", lastMsg.isFromMe() ? "true" : "false");
+            if (Util.isGroupJid(jid)) {
+                if (lastMsg.isFromMe()) {
+                    jsonObject.put("participant", Util.convertJidToSend(authInfo.getWid()));
+                } else {
+                    jsonObject.put("participant", Util.convertJidToSend(lastMsg.getParticipant()));
+                }
+            }
+            return jsonObject;
+        });
+    }
+
     public CompletableFuture<List<MessageCollectionItem>> loadMessages(String jid, int count, MessageCollectionItem lastMessage) {
         String index = null;
         String fromMe = null;
@@ -443,19 +620,22 @@ public class WhatsAppClient extends WebSocketClient {
                     var messagesList = new ArrayList<MessageCollectionItem>();
 
                     try {
-                        var jsonArray = ((JsonArray) jsonElement).get(2).getAsJsonArray();
-                        for (int i = 0; i < jsonArray.size(); i++) {
-                            messagesList.add(new MessageCollectionItem(this, jsonArray.get(i).getAsJsonArray().get(2).getAsJsonObject()));
-                        }
-
-                        var chat = getCollection(ChatCollection.class).getItem(jid);
-
-                        for (MessageCollectionItem messageCollectionItem : messagesList) {
-                            if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem)) {
-                                logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
-                                throw new RuntimeException("Fail on add received message to collection: " + messageCollectionItem.getId());
+                        if (((JsonArray) jsonElement).get(2).isJsonArray()) {
+                            var jsonArray = ((JsonArray) jsonElement).get(2).getAsJsonArray();
+                            for (int i = 0; i < jsonArray.size(); i++) {
+                                messagesList.add(new MessageCollectionItem(this, jsonArray.get(i).getAsJsonArray().get(2).getAsJsonObject()));
                             }
-                            chat.addMessage(messageCollectionItem);
+
+                            var chat = getCollection(ChatCollection.class).getItem(jid);
+
+                            var msgsArray = messagesList.toArray(new MessageCollectionItem[0]);
+
+                            if (!getCollection(MessageCollection.class).tryAddItems(msgsArray)) {
+                                logger.log(Level.SEVERE, "Fail on add received messages to collection");
+                                throw new RuntimeException("Fail on add received messages to collection");
+                            }
+
+                            chat.addMessages(msgsArray);
                         }
 
                     } catch (Exception e) {
@@ -468,57 +648,7 @@ public class WhatsAppClient extends WebSocketClient {
     public CompletableFuture<MessageCollectionItem> sendMessage(String jid, SendMessageRequest messageSend) {
         return sendPresence(PresenceType.AVAILABLE).thenCompose(ignore -> {
             return prepareMessageContent(messageSend).thenCompose(content -> {
-                var builder = WebMessageInfo.newBuilder();
-                builder
-                        .setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(jid)).setFromMe(true).setId(generateMessageID()))
-                        .setMessage(content)
-                        .setMessageTimestamp(System.currentTimeMillis() / 1000L)
-                        .setStatus(WebMessageInfo.WebMessageInfoStatus.PENDING);
-                if (jid.contains("@g.us")) {
-                    builder.setParticipant(authInfo.getWid());
-                }
-                var jsonObj = new JsonObject();
-                jsonObj.addProperty("epoch", String.valueOf(msgCount));
-                jsonObj.addProperty("type", "relay");
-
-                var msg = builder.build();
-
-                var childs = new JsonArray();
-                var child = new JsonArray();
-                child.add("message");
-                child.add(JsonNull.INSTANCE);
-                child.add(Util.GSON.toJsonTree(msg.toByteArray()));
-                childs.add(child);
-
-                var jsonArray = new JsonArray();
-                jsonArray.add("action");
-                jsonArray.add(jsonObj);
-                jsonArray.add(childs);
-
-                //TODO: build message and add to collection before send
-
-                MessageCollectionItem messageCollectionItem;
-                try {
-                    messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
-                    if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
-                        throw new RuntimeException("Error on add to MessageCollection");
-                    if (!getCollection(ChatCollection.class).hasItem(jid))
-                        throw new RuntimeException("Chat not found on local collection to send message, try use findChat before. {" + jid + "}");
-                    getCollection(ChatCollection.class).getItem(jid).addMessage(messageCollectionItem);
-                } catch (Exception e) {
-                    logger.log(Level.SEVERE, "Error on build MessageCollectionItem before send", e);
-                    return CompletableFuture.failedFuture(e);
-                }
-
-                MessageCollectionItem finalMessageCollectionItem = messageCollectionItem;
-                return sendBinary(
-                        builder.getKey().getId(),
-                        jsonArray,
-                        new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.message, jid.equals(authInfo.getWid()) ? BinaryConstants.WA.WAFlag.acknowledge : BinaryConstants.WA.WAFlag.ignore),
-                        JsonElement.class).thenApply(jsonElement -> {
-                    //TODO: check return status
-                    return finalMessageCollectionItem;
-                });
+                return buildAndRelayMessage(jid, generateMessageFromContent(jid, content));
             });
         });
     }
@@ -833,6 +963,58 @@ public class WhatsAppClient extends WebSocketClient {
         }, executorService);
     }
 
+    private WebMessageInfo generateMessageFromContent(String jid, Message.Builder content) {
+        var builder = WebMessageInfo.newBuilder();
+        builder
+                .setKey(MessageKey.newBuilder().setRemoteJid(Util.convertJidToSend(jid)).setFromMe(true).setId(generateMessageID()))
+                .setMessage(content)
+                .setMessageTimestamp(System.currentTimeMillis() / 1000L)
+                .setStatus(WebMessageInfo.WebMessageInfoStatus.PENDING);
+        if (jid.contains("@g.us")) {
+            builder.setParticipant(authInfo.getWid());
+        }
+        return builder.build();
+    }
+
+    private CompletableFuture<JsonElement> relayMessage(WebMessageInfo msg) {
+        var actionQuery = new JSONArray();
+        actionQuery
+                .put("action")
+                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "relay"))
+                .put(new JSONArray().put(
+                        new JSONArray()
+                                .put("message")
+                                .put(JSONObject.NULL)
+                                .put(new JSONArray(msg.toByteArray()))
+                ));
+
+        return sendBinary(
+                msg.getKey().getId(),
+                Util.GSON.fromJson(actionQuery.toString(), JsonArray.class),
+                new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.message, msg.getKey().getRemoteJid().equals(authInfo.getWid()) ? BinaryConstants.WA.WAFlag.acknowledge : BinaryConstants.WA.WAFlag.ignore),
+                JsonElement.class);
+    }
+
+    private CompletableFuture<MessageCollectionItem> buildAndRelayMessage(String jid, WebMessageInfo msg) {
+        var messageCollectionItem = new AtomicReference<MessageCollectionItem>(null);
+        try {
+            messageCollectionItem.set(new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject()));
+            if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.get()))
+                throw new RuntimeException("Error on add to MessageCollection");
+            if (!getCollection(ChatCollection.class).hasItem(jid))
+                throw new RuntimeException("Chat not found on local collection to send message, try use findChat before. {" + jid + "}");
+            getCollection(ChatCollection.class).getItem(jid).addMessage(messageCollectionItem.get());
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Error on build MessageCollectionItem before send", e);
+            return CompletableFuture.failedFuture(e);
+        }
+
+        return relayMessage(msg).thenApply(jsonElement -> {
+            //TODO: check return status
+            return messageCollectionItem.get();
+        });
+    }
+
     private CompletableFuture<MediaConnResponse.MediaConn> getMediaConn() {
         if (cacheMediaConnResponse != null && cacheMediaConnResponse.getFetchDate().plusSeconds(cacheMediaConnResponse.getTtl()).isAfter(LocalDateTime.now())) {
             return CompletableFuture.completedFuture(cacheMediaConnResponse);
@@ -909,9 +1091,13 @@ public class WhatsAppClient extends WebSocketClient {
     //See WhatsApp Web {openStream} function
     private CompletableFuture<Void> syncCollections() {
         setDriverState(DriverState.WAITING_SYNC);
+        /*sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), JsonElement.class).thenAccept(jsonElement -> {
+            System.out.println(jsonElement);
+        });*/
         var chat = getCollection(ChatCollection.class).sync();
         var contact = getCollection(ContactCollection.class).sync();
-        return chat.thenCompose(unused -> contact);
+        var quickReply = authInfo.isBusiness() ? getCollection(QuickReplyCollection.class).sync() : CompletableFuture.allOf();
+        return CompletableFuture.allOf(chat, contact, quickReply);
         /**
          * sendBinary(new BaseQuery("status", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryStatus, BinaryConstants.WA.WAFlag.ignore), null);
          *             if (authInfo.isBusiness()) {
@@ -974,7 +1160,7 @@ public class WhatsAppClient extends WebSocketClient {
                             }
                         }
                         runnableOnConnect.clear();
-                        isSynced.set(true);
+                        isSynced = true;
                     }
                     for (ChatCollectionItem chatItem : getCollection(ChatCollection.class).getAllItems()) {
 
@@ -1089,7 +1275,9 @@ public class WhatsAppClient extends WebSocketClient {
 
                 if (wsEvents.containsKey(msgTag)) {
                     var response = wsEvents.get(msgTag);
-                    response.complete(jsonDecoded);
+                    executorService.submit(runnableFactory.apply(() -> {
+                        response.complete(jsonDecoded);
+                    }));
                 } else {
                     var binaryType = jsonDecoded.get(0).getAsString();
                     switch (binaryType) {
@@ -1103,12 +1291,12 @@ public class WhatsAppClient extends WebSocketClient {
                             switch (responseType) {
                                 case "chat": {
                                     var chatCollection = getCollection(ChatCollection.class);
-                                    chatCollection.getSyncFuture().complete(jsonDecoded.get(2).getAsJsonArray());
+                                    chatCollection.getSyncFuture().complete(jsonDecoded);
                                     break;
                                 }
                                 case "contacts": {
-                                    var chatCollection = getCollection(ContactCollection.class);
-                                    chatCollection.getSyncFuture().complete(jsonDecoded.get(2).getAsJsonArray());
+                                    var contactCollection = getCollection(ContactCollection.class);
+                                    contactCollection.getSyncFuture().complete(jsonDecoded);
                                     break;
                                 }
                                 default:
@@ -1132,7 +1320,7 @@ public class WhatsAppClient extends WebSocketClient {
                                                 var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
                                                 switch (addType) {
                                                     case "relay": {
-                                                        if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
+                                                        if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
                                                             logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
                                                         runOnSync(() -> {
                                                             if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
@@ -1160,7 +1348,7 @@ public class WhatsAppClient extends WebSocketClient {
                                                     var msg = msgBuilder.build();
                                                     var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
                                                     runOnSync(() -> {
-                                                        if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.getId(), messageCollectionItem))
+                                                        if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
                                                             logger.log(Level.SEVERE, "Fail on add received last message to collection: " + messageCollectionItem.getId());
                                                         if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
                                                             getCollection(ChatCollection.class).getItem(messageCollectionItem.getRemoteJid()).setLastMessage(messageCollectionItem);
@@ -1211,7 +1399,9 @@ public class WhatsAppClient extends WebSocketClient {
 
                 if (wsEvents.containsKey(msgTag)) {
                     var response = wsEvents.get(msgTag);
-                    response.complete(jsonElement);
+                    executorService.submit(runnableFactory.apply(() -> {
+                        response.complete(jsonElement);
+                    }));
                 } else if (jsonElement.isJsonArray()) {
                     var jsonArray = jsonElement.getAsJsonArray();
                     switch (jsonArray.get(0).getAsString()) {

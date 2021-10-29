@@ -2,8 +2,10 @@ package br.com.zapia.wpp.api.ws.utils;
 
 import at.favre.lib.crypto.HKDF;
 import br.com.zapia.wpp.api.ws.Constants;
+import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
 import br.com.zapia.wpp.api.ws.model.EncryptedStream;
 import br.com.zapia.wpp.api.ws.model.MediaKey;
+import br.com.zapia.wpp.api.ws.model.MessageCollectionItem;
 import br.com.zapia.wpp.api.ws.model.MessageType;
 import com.google.common.hash.Hashing;
 import com.google.common.primitives.Bytes;
@@ -11,6 +13,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.util.JsonFormat;
 import org.apache.tika.Tika;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -310,5 +314,15 @@ public class Util {
         } catch (Exception ignore) {
             return false;
         }
+    }
+
+    public static boolean isGroupJid(String jid) {
+        return jid.endsWith("@g.us");
+    }
+
+    public static WebMessageInfo convertMessageCollectionItemToWebMessageInfo(MessageCollectionItem messageCollectionItem) throws InvalidProtocolBufferException {
+        var msgBuilder = WebMessageInfo.newBuilder();
+        JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(messageCollectionItem.getJsonObject()), msgBuilder);
+        return msgBuilder.build();
     }
 }

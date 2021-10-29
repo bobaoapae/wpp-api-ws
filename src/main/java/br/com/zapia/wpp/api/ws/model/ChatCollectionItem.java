@@ -16,6 +16,7 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
     private String name;
     private int unreadMessages;
     private int mute;
+    private int pin;
     private boolean isReadOnly;
     private MessageCollectionItem lastMessage;
 
@@ -36,21 +37,30 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
         whatsAppClient.sendChatPresenceUpdate(getId(), presenceType);
     }
 
-    public void setLastMessage(MessageCollectionItem lastMessage) {
-        if (selfCollection != null)
-            selfCollection.triggerEvent(EventType.CHANGE, List.of(this));
-        this.lastMessage = lastMessage;
-    }
-
-    public MessageCollectionItem getLastMessage() {
-        return lastMessage;
-    }
-
     public void addMessage(MessageCollectionItem messageCollectionItem) {
+        addMessages(messageCollectionItem);
+    }
+
+    public void addMessages(MessageCollectionItem... messageCollectionItem) {
         synchronized (messages) {
-            if (!messages.containsKey(messageCollectionItem.getId())) {
-                messages.put(messageCollectionItem.getId(), messageCollectionItem);
+            for (MessageCollectionItem item : messageCollectionItem) {
+                if (!messages.containsKey(item.getId())) {
+                    messages.put(item.getId(), item);
+                }
             }
+        }
+    }
+
+    public void removeMessage(String id) {
+        removeMessages(id);
+    }
+
+    public void removeMessages(String... ids) {
+        synchronized (messages) {
+            for (String id : ids) {
+                messages.remove(id);
+            }
+            selfCollection.triggerEvent(EventType.CHANGE, List.of(this));
         }
     }
 
@@ -58,6 +68,16 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
         synchronized (messages) {
             return Collections.unmodifiableList(messages.values().stream().toList());
         }
+    }
+
+    public void setLastMessage(MessageCollectionItem lastMessage) {
+        if (selfCollection != null)
+            selfCollection.triggerEvent(EventType.CHANGE, List.of(this));
+        this.lastMessage = lastMessage;
+    }
+
+    public void setPin(int pin) {
+        this.pin = pin;
     }
 
     public String getName() {
@@ -72,8 +92,16 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
         return mute;
     }
 
+    public int getPin() {
+        return pin;
+    }
+
     public boolean isReadOnly() {
         return isReadOnly;
+    }
+
+    public MessageCollectionItem getLastMessage() {
+        return lastMessage;
     }
 
     @Override
@@ -82,6 +110,8 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
             unreadMessages = jsonObject.get("count").getAsInt();
         if (jsonObject.has("mute") && !jsonObject.get("mute").getAsString().isEmpty())
             mute = jsonObject.get("mute").getAsInt();
+        if (jsonObject.has("pin") && !jsonObject.get("pin").getAsString().isEmpty())
+            pin = jsonObject.get("pin").getAsInt();
         if (jsonObject.has("name"))
             name = jsonObject.get("name").getAsString();
         isReadOnly = jsonObject.has("read_only") && jsonObject.get("read_only").getAsBoolean();
@@ -92,6 +122,7 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
         name = baseCollectionItem.getName();
         unreadMessages = baseCollectionItem.getUnreadMessages();
         mute = baseCollectionItem.getMute();
+        pin = baseCollectionItem.getPin();
         isReadOnly = baseCollectionItem.isReadOnly();
     }
 
