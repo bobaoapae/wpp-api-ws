@@ -45,6 +45,7 @@ import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Iterator;
@@ -324,5 +325,9 @@ public class Util {
         var msgBuilder = WebMessageInfo.newBuilder();
         JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(messageCollectionItem.getJsonObject()), msgBuilder);
         return msgBuilder.build();
+    }
+
+    public static boolean isNewMessage(LocalDateTime connectTime, MessageCollectionItem messageCollectionItem) {
+        return connectTime.isBefore(messageCollectionItem.getTimeStamp());
     }
 }

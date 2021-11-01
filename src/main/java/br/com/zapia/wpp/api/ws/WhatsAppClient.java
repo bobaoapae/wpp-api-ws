@@ -85,6 +85,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     private DriverState driverState;
     private int msgCount;
+    private LocalDateTime connectTime;
     private LocalDateTime lastSeen;
     private LocalDateTime lastSendPresence;
     private PresenceType lastPresenceType;
@@ -142,7 +143,7 @@ public class WhatsAppClient extends WebSocketClient {
         } catch (Exception ignore) {
             new Random().nextBytes(bytes);
         }
-        return "3EB0" + Util.bytesToHex(bytes);
+        return ("3EB0" + Util.bytesToHex(bytes)).toUpperCase();
     }
 
     private void runOnSync(Runnable runnable) {
@@ -444,8 +445,18 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
-    public CompletableFuture<JsonElement> clearChat(String jid, boolean includeStarred) {
-        return getChatIndex(jid).thenCompose(chatIndex -> {
+    public CompletableFuture<Boolean> clearChat(String jid, boolean includeStarred) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null) {
+                logger.log(Level.SEVERE, "Chat not found to clear messages {" + jid + "}");
+                return CompletableFuture.completedFuture(false);
+            }
+            return clearChat(chatCollectionItem, includeStarred);
+        });
+    }
+
+    public CompletableFuture<Boolean> clearChat(ChatCollectionItem chatCollectionItem, boolean includeStarred) {
+        return getChatIndex(chatCollectionItem).thenCompose(chatIndex -> {
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
@@ -453,22 +464,20 @@ public class WhatsAppClient extends WebSocketClient {
                     .put(new JSONArray().put(
                             new JSONArray()
                                     .put("chat")
-                                    .put(chatIndex.put("jid", Util.convertJidToSend(jid)).put("type", "clear").put("star", includeStarred ? "true" : "false"))
+                                    .put(chatIndex.put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "clear").put("star", includeStarred ? "true" : "false"))
                                     .put(JSONObject.NULL)
                     ));
 
-            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenCompose(jsonObject -> {
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
                 if (jsonObject.get("status").getAsInt() == 200) {
-                    return findChatFromId(jid).thenApply(chatCollectionItem -> {
-                        var lastMsgId = String.valueOf(chatIndex.get("index"));
-                        var msgsRemove = chatCollectionItem.getMessages().stream().filter(messageCollectionItem -> !messageCollectionItem.getId().equals(lastMsgId) && (!includeStarred || !messageCollectionItem.isStarred())).map(BaseCollectionItem::getId).toList().toArray(new String[0]);
-                        chatCollectionItem.removeMessages(msgsRemove);
-                        getCollection(MessageCollection.class).tryRemoveItems(msgsRemove);
-                        return jsonObject;
-                    });
+                    var lastMsgId = String.valueOf(chatIndex.get("index"));
+                    var msgsRemove = chatCollectionItem.getMessages().stream().filter(messageCollectionItem -> !messageCollectionItem.getId().equals(lastMsgId) && (!includeStarred || !messageCollectionItem.isStarred())).map(BaseCollectionItem::getId).toList().toArray(new String[0]);
+                    chatCollectionItem.removeMessages(msgsRemove);
+                    getCollection(MessageCollection.class).tryRemoveItems(msgsRemove);
+                    return true;
                 }
 
-                return CompletableFuture.completedFuture(jsonObject);
+                return false;
             });
         });
     }
@@ -534,47 +543,124 @@ public class WhatsAppClient extends WebSocketClient {
         });
     }*/
 
-    public CompletableFuture<JsonElement> pinChat(String jid) {
+    public CompletableFuture<Boolean> pinChat(String jid) {
         return findChatFromId(jid).thenCompose(chatCollectionItem -> {
-            var pinTime = System.currentTimeMillis() / 1000L;
-            var actionQuery = new JSONArray();
-            actionQuery
-                    .put("action")
-                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
-                    .put(new JSONArray().put(
-                            new JSONArray()
-                                    .put("chat")
-                                    .put(new JSONObject().put("jid", Util.convertJidToSend(jid)).put("type", "pin").put("pin", pinTime))
-                                    .put(JSONObject.NULL)
-                    ));
+            if (chatCollectionItem == null) {
+                return CompletableFuture.failedFuture(new Exception("Chat not found to pin: " + jid));
+            }
 
-            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
-                if (jsonObject.get("status").getAsInt() == 200) {
-                    chatCollectionItem.setPin((int) pinTime);
-                }
-                return jsonObject;
-            });
+            return pinChat(chatCollectionItem);
         });
     }
 
-    public CompletableFuture<JsonElement> unPinChat(String jid) {
+    public CompletableFuture<Boolean> pinChat(ChatCollectionItem chatCollectionItem) {
+        var pinTime = System.currentTimeMillis() / 1000L;
+        var actionQuery = new JSONArray();
+        actionQuery
+                .put("action")
+                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                .put(new JSONArray().put(
+                        new JSONArray()
+                                .put("chat")
+                                .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("pin", pinTime))
+                                .put(JSONObject.NULL)
+                ));
+
+        return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
+            if (jsonObject.get("status").getAsInt() == 200) {
+                chatCollectionItem.setPin((int) pinTime);
+                return true;
+            }
+            return false;
+        });
+    }
+
+    public CompletableFuture<Boolean> unPinChat(String jid) {
         return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null) {
+                return CompletableFuture.failedFuture(new Exception("Chat not found to pin: " + jid));
+            }
+
+            return unPinChat(chatCollectionItem);
+        });
+    }
+
+    public CompletableFuture<Boolean> unPinChat(ChatCollectionItem chatCollectionItem) {
+        var actionQuery = new JSONArray();
+        actionQuery
+                .put("action")
+                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                .put(new JSONArray().put(
+                        new JSONArray()
+                                .put("chat")
+                                .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("previous", chatCollectionItem.getPin()))
+                                .put(JSONObject.NULL)
+                ));
+
+        return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
+            if (jsonObject.get("status").getAsInt() == 200) {
+                chatCollectionItem.setPin(0);
+                return true;
+            }
+            return false;
+        });
+    }
+
+    public CompletableFuture<Boolean> markChatRead(String jid) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null)
+                return CompletableFuture.completedFuture(false);
+            return markChatRead(chatCollectionItem);
+        });
+    }
+
+    public CompletableFuture<Boolean> markChatRead(ChatCollectionItem chatCollectionItem) {
+        return markChatUnReadOrRead(chatCollectionItem, true).thenApply(aBoolean -> {
+            if (aBoolean)
+                chatCollectionItem.setUnreadMessages(0);
+            return aBoolean;
+        });
+    }
+
+    public CompletableFuture<Boolean> markChatUnRead(String jid) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null)
+                return CompletableFuture.completedFuture(false);
+            return markChatUnRead(chatCollectionItem);
+        });
+    }
+
+    public CompletableFuture<Boolean> markChatUnRead(ChatCollectionItem chatCollectionItem) {
+        return markChatUnReadOrRead(chatCollectionItem, false).thenApply(aBoolean -> {
+            if (aBoolean)
+                chatCollectionItem.setUnreadMessages(-1);
+            return aBoolean;
+        });
+    }
+
+    private CompletableFuture<Boolean> markChatUnReadOrRead(ChatCollectionItem chatCollectionItem, boolean read) {
+        if (read && chatCollectionItem.getUnreadMessages() == 0) {
+            return CompletableFuture.completedFuture(true);
+        }
+
+        if (!read && (chatCollectionItem.getUnreadMessages() == -1 || chatCollectionItem.getUnreadMessages() > 0)) {
+            return CompletableFuture.completedFuture(true);
+        }
+
+        return getChatIndex(chatCollectionItem).thenCompose(chatIndex -> {
+            var count = !read ? -2 : chatCollectionItem.getUnreadMessages();
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
                     .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                     .put(new JSONArray().put(
                             new JSONArray()
-                                    .put("chat")
-                                    .put(new JSONObject().put("jid", Util.convertJidToSend(jid)).put("type", "pin").put("previous", chatCollectionItem.getPin()))
+                                    .put("read")
+                                    .put(chatIndex.put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("count", String.valueOf(count)))
                                     .put(JSONObject.NULL)
                     ));
-
-            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.chat, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject -> {
-                if (jsonObject.get("status").getAsInt() == 200) {
-                    chatCollectionItem.setPin(0);
-                }
-                return jsonObject;
+            return sendBinary(Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.read, BinaryConstants.WA.WAFlag.ignore), JsonObject.class).thenApply(jsonObject1 -> {
+                return jsonObject1.get("status").getAsInt() == 200;
             });
         });
     }
@@ -584,15 +670,22 @@ public class WhatsAppClient extends WebSocketClient {
             if (chatCollectionItem == null) {
                 return CompletableFuture.failedFuture(new Exception("Chat not found to build chatIndex: " + jid));
             }
-            if (chatCollectionItem.getMessages().isEmpty()) {
-                return chatCollectionItem.loadMessages(1);
-            }
-            return CompletableFuture.completedFuture(chatCollectionItem.getMessages());
-        }).thenApply(messageCollectionItems -> {
+            return getChatIndex(chatCollectionItem);
+        });
+    }
+
+    private CompletableFuture<JSONObject> getChatIndex(ChatCollectionItem chatCollectionItem) {
+        var msgs = new CompletableFuture<List<MessageCollectionItem>>();
+        if (chatCollectionItem.getMessages().isEmpty()) {
+            chatCollectionItem.loadMessages(1).thenAccept(msgs::complete);
+        } else {
+            msgs.complete(chatCollectionItem.getMessages());
+        }
+        return msgs.thenApply(messageCollectionItems -> {
             var lastMsg = messageCollectionItems.get(messageCollectionItems.size() - 1);
 
             var jsonObject = new JSONObject().put("index", lastMsg.getId()).put("owner", lastMsg.isFromMe() ? "true" : "false");
-            if (Util.isGroupJid(jid)) {
+            if (Util.isGroupJid(chatCollectionItem.getId())) {
                 if (lastMsg.isFromMe()) {
                     jsonObject.put("participant", Util.convertJidToSend(authInfo.getWid()));
                 } else {
@@ -646,10 +739,22 @@ public class WhatsAppClient extends WebSocketClient {
     }
 
     public CompletableFuture<MessageCollectionItem> sendMessage(String jid, SendMessageRequest messageSend) {
+        return findChatFromId(jid).thenCompose(chatCollectionItem -> {
+            if (chatCollectionItem == null) {
+                logger.log(Level.SEVERE, "Chat not found to send message. {" + jid + "}");
+                return CompletableFuture.failedFuture(new Exception("Chat not found to send message. {" + jid + "}"));
+            }
+
+            return sendMessage(chatCollectionItem, messageSend);
+        });
+    }
+
+    public CompletableFuture<MessageCollectionItem> sendMessage(ChatCollectionItem chatCollectionItem, SendMessageRequest messageSend) {
         return sendPresence(PresenceType.AVAILABLE).thenCompose(ignore -> {
-            return prepareMessageContent(messageSend).thenCompose(content -> {
-                return buildAndRelayMessage(jid, generateMessageFromContent(jid, content));
-            });
+            var readChatIfNeed = chatCollectionItem.getUnreadMessages() > 0 ? markChatRead(chatCollectionItem) : CompletableFuture.completedFuture(true);
+            return readChatIfNeed.thenCompose(aBoolean ->
+                    prepareMessageContent(messageSend).thenCompose(content ->
+                            buildAndRelayMessage(chatCollectionItem, generateMessageFromContent(chatCollectionItem.getId(), content))));
         });
     }
 
@@ -995,15 +1100,13 @@ public class WhatsAppClient extends WebSocketClient {
                 JsonElement.class);
     }
 
-    private CompletableFuture<MessageCollectionItem> buildAndRelayMessage(String jid, WebMessageInfo msg) {
+    private CompletableFuture<MessageCollectionItem> buildAndRelayMessage(ChatCollectionItem chatCollectionItem, WebMessageInfo msg) {
         var messageCollectionItem = new AtomicReference<MessageCollectionItem>(null);
         try {
             messageCollectionItem.set(new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject()));
             if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem.get()))
                 throw new RuntimeException("Error on add to MessageCollection");
-            if (!getCollection(ChatCollection.class).hasItem(jid))
-                throw new RuntimeException("Chat not found on local collection to send message, try use findChat before. {" + jid + "}");
-            getCollection(ChatCollection.class).getItem(jid).addMessage(messageCollectionItem.get());
+            chatCollectionItem.addMessage(messageCollectionItem.get());
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Error on build MessageCollectionItem before send", e);
             return CompletableFuture.failedFuture(e);
@@ -1147,6 +1250,7 @@ public class WhatsAppClient extends WebSocketClient {
             var macKey = Arrays.copyOfRange(keysDecrypted, 32, 64);
 
             communicationKeys = new CommunicationKeys(sharedKey, expandedKey, keysEncrypted, keysDecrypted, encKey, macKey);
+            connectTime = LocalDateTime.now();
 
             executorService.submit(runnableFactory.apply(() -> {
                 sendPresence(PresenceType.AVAILABLE);
@@ -1161,9 +1265,6 @@ public class WhatsAppClient extends WebSocketClient {
                         }
                         runnableOnConnect.clear();
                         isSynced = true;
-                    }
-                    for (ChatCollectionItem chatItem : getCollection(ChatCollection.class).getAllItems()) {
-
                     }
                     if (onConnect != null) {
                         onConnect.run();
@@ -1222,6 +1323,14 @@ public class WhatsAppClient extends WebSocketClient {
 
     public String getLastQrCode() {
         return lastQrCode;
+    }
+
+    public AuthInfo getAuthInfo() {
+        return authInfo;
+    }
+
+    public LocalDateTime getConnectTime() {
+        return connectTime;
     }
 
     @Override

@@ -269,29 +269,52 @@ class WhatsAppClientTest {
         assertNotNull(result);
     }
 
-
     @Order(30)
     @Test
-    public void clearChat() throws InterruptedException, ExecutionException, TimeoutException {
-        var result = whatsAppClient.clearChat(chatCollectionItem.getId(), true).get(30, TimeUnit.SECONDS);
+    public void markChatUnRead() throws InterruptedException, ExecutionException, TimeoutException {
+        TimeUnit.SECONDS.sleep(3);
+        var result = whatsAppClient.markChatUnRead(chatCollectionItem).get(30, TimeUnit.SECONDS);
         assertNotNull(result);
+        assertTrue(result);
+        assertEquals(-1, chatCollectionItem.getUnreadMessages());
+    }
+
+    @Order(31)
+    @Test
+    public void markChatRead() throws InterruptedException, ExecutionException, TimeoutException {
+        TimeUnit.SECONDS.sleep(3);
+        var result = whatsAppClient.markChatRead(chatCollectionItem).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+        assertTrue(result);
+        assertEquals(0, chatCollectionItem.getUnreadMessages());
+    }
+
+    @Order(32)
+    @Test
+    public void clearChat() throws InterruptedException, ExecutionException, TimeoutException {
+        TimeUnit.SECONDS.sleep(3);
+        var result = whatsAppClient.clearChat(chatCollectionItem, true).get(30, TimeUnit.SECONDS);
+        assertNotNull(result);
+        assertTrue(result);
     }
 
 
-    @Order(31)
+    @Order(33)
     @Test
     public void pinChat() throws InterruptedException, ExecutionException, TimeoutException {
         var result = whatsAppClient.pinChat(chatCollectionItem.getId()).get(30, TimeUnit.SECONDS);
         assertNotNull(result);
+        assertTrue(result);
         assertTrue(chatCollectionItem.getPin() > 0);
     }
 
 
-    @Order(32)
+    @Order(34)
     @Test
     public void unpinChat() throws InterruptedException, ExecutionException, TimeoutException {
         var result = whatsAppClient.unPinChat(chatCollectionItem.getId()).get(30, TimeUnit.SECONDS);
         assertNotNull(result);
+        assertTrue(result);
         assertTrue(chatCollectionItem.getPin() <= 0);
     }
 

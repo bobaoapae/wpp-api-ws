@@ -5,6 +5,7 @@ import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -25,6 +26,11 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
 
     public void setSelfCollection(BaseCollection<T> selfCollection) {
         this.selfCollection = selfCollection;
+    }
+
+    public void triggerChange() {
+        if (selfCollection != null)
+            selfCollection.triggerEvent(EventType.CHANGE, List.of((T) this));
     }
 
     //TODO: build base properties

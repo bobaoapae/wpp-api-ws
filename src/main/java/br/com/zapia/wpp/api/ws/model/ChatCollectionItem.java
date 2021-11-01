@@ -1,13 +1,11 @@
 package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
+import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
@@ -46,8 +44,11 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
             for (MessageCollectionItem item : messageCollectionItem) {
                 if (!messages.containsKey(item.getId())) {
                     messages.put(item.getId(), item);
+                    if (!item.isFromMe() && Util.isNewMessage(whatsAppClient.getConnectTime(), item))
+                        unreadMessages = Math.max(unreadMessages + 1, 1);
                 }
             }
+            triggerChange();
         }
     }
 
@@ -60,24 +61,30 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
             for (String id : ids) {
                 messages.remove(id);
             }
-            selfCollection.triggerEvent(EventType.CHANGE, List.of(this));
+            triggerChange();
         }
     }
 
     public List<MessageCollectionItem> getMessages() {
         synchronized (messages) {
-            return Collections.unmodifiableList(messages.values().stream().toList());
+            return Collections.unmodifiableList(messages.values().stream().sorted(Comparator.comparing(MessageCollectionItem::getTimeStamp)).toList());
         }
     }
 
     public void setLastMessage(MessageCollectionItem lastMessage) {
-        if (selfCollection != null)
-            selfCollection.triggerEvent(EventType.CHANGE, List.of(this));
         this.lastMessage = lastMessage;
+        addMessage(lastMessage);
+        triggerChange();
     }
 
     public void setPin(int pin) {
         this.pin = pin;
+        triggerChange();
+    }
+
+    public void setUnreadMessages(int unreadMessages) {
+        this.unreadMessages = unreadMessages;
+        triggerChange();
     }
 
     public String getName() {
