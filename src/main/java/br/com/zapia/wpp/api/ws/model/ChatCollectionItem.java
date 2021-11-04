@@ -2,7 +2,6 @@ package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
 import br.com.zapia.wpp.api.ws.utils.Util;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.util.*;
@@ -125,7 +124,7 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
     }
 
     @Override
-    void update(ChatCollectionItem baseCollectionItem) {
+    protected void update(ChatCollectionItem baseCollectionItem) {
         name = baseCollectionItem.getName();
         unreadMessages = baseCollectionItem.getUnreadMessages();
         mute = baseCollectionItem.getMute();
@@ -134,7 +133,7 @@ public class ChatCollectionItem extends BaseCollectionItem<ChatCollectionItem> {
     }
 
     @Override
-    void update(JsonElement jsonElement) {
+    protected void update(JsonObject jsonObject) {
 
     }
 }

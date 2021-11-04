@@ -72,7 +72,7 @@ public class WhatsAppClient extends WebSocketClient {
     private final Object syncIsSynced;
     private final Object syncPresence;
     private final Map<Class<? extends BaseCollection<? extends BaseCollectionItem<?>>>, BaseCollection<? extends BaseCollectionItem<?>>> collections;
-    private final AsyncLoadingCache<String, CheckNumberExistResponse> cacheNumberExist;
+    private final AsyncLoadingCache<String, CheckIdIsOnWhatsAppResponse> cacheCheckIdExist;
     private final List<ScheduledFuture<?>> scheduledFutures;
     private final Map<String, CompletableFuture<JsonElement>> wsEvents;
     private final List<Runnable> runnableOnConnect;
@@ -109,10 +109,10 @@ public class WhatsAppClient extends WebSocketClient {
         this.wsEvents = new ConcurrentHashMap<>();
         this.scheduledFutures = new ArrayList<>();
         this.collections = new HashMap<>();
-        this.cacheNumberExist = Caffeine.newBuilder()
+        this.cacheCheckIdExist = Caffeine.newBuilder()
                 .maximumSize(10_000)
                 .expireAfterWrite(Duration.ofMinutes(5))
-                .buildAsync(number -> sendJson(new CheckNumberExistRequest(number).toJson(), CheckNumberExistResponse.class).get());
+                .buildAsync(number -> sendJson(new CheckIdIsOnWhatsApp(number).toJson(), CheckIdIsOnWhatsAppResponse.class).get());
         this.runnableOnConnect = new ArrayList<>();
         this.syncIsSynced = new Object();
         this.syncPresence = new Object();
@@ -242,7 +242,7 @@ public class WhatsAppClient extends WebSocketClient {
                 authInfo = new AuthInfo();
                 authInfo.setClientId(clientId);
             }
-            //startKeepAlive();
+            startKeepAlive();
             sendInit().thenAccept(initResponse -> {
                 if (initResponse.getStatus() == 200) {
                     serverId = initResponse.getRef();
@@ -328,14 +328,18 @@ public class WhatsAppClient extends WebSocketClient {
         sendBinary(new BaseAction("set", String.valueOf(msgCount), childs).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.presence, BinaryConstants.WA.WAFlag.valueOf(presenceType.name().toLowerCase())), JsonElement.class);
     }
 
-    public CompletableFuture<CheckNumberExistResponse> checkNumberExist(String number) {
-        return cacheNumberExist.get(number);
+    public CompletableFuture<CheckIdIsOnWhatsAppResponse> checkNumberExist(String number) {
+        return checkIdExist(number + "@c.us");
+    }
+
+    public CompletableFuture<CheckIdIsOnWhatsAppResponse> checkIdExist(String id) {
+        return cacheCheckIdExist.get(id);
     }
 
     public CompletableFuture<ChatCollectionItem> findChatFromNumber(String number) {
-        return checkNumberExist(number).thenCompose(checkNumberExistResponse -> {
-            if (checkNumberExistResponse.getStatus() == 200) {
-                return findChatFromId(checkNumberExistResponse.getJid());
+        return checkNumberExist(number).thenCompose(checkIdIsOnWhatsAppResponse -> {
+            if (checkIdIsOnWhatsAppResponse.getStatus() == 200) {
+                return findChatFromId(checkIdIsOnWhatsAppResponse.getJid());
             }
             return CompletableFuture.completedFuture(null);
         });
@@ -348,21 +352,26 @@ public class WhatsAppClient extends WebSocketClient {
         }
 
         return findContactFromId(id).thenApply(contactCollectionItem -> {
+            if (contactCollectionItem == null)
+                return null;
+
             //TODO: others default properties
             var jsonObject = new JsonObject();
             jsonObject.addProperty("jid", contactCollectionItem.getId());
             var chat = new ChatCollectionItem(this, jsonObject);
-            if (!getCollection(ChatCollection.class).tryAddItem(chat))
+            if (!getCollection(ChatCollection.class).tryAddItem(chat)) {
                 logger.log(Level.SEVERE, "Fail on add chat to collection: " + id);
+                throw new RuntimeException("Fail on add chat to collection: " + id);
+            }
 
             return chat;
         });
     }
 
     public CompletableFuture<ContactCollectionItem> findContactFromNumber(String number) {
-        return checkNumberExist(number).thenCompose(checkNumberExistResponse -> {
-            if (checkNumberExistResponse.getStatus() == 200) {
-                return findContactFromId(checkNumberExistResponse.getJid());
+        return checkNumberExist(number).thenCompose(checkIdIsOnWhatsAppResponse -> {
+            if (checkIdIsOnWhatsAppResponse.getStatus() == 200) {
+                return findContactFromId(checkIdIsOnWhatsAppResponse.getJid());
             }
             return CompletableFuture.completedFuture(null);
         });
@@ -374,14 +383,23 @@ public class WhatsAppClient extends WebSocketClient {
             return CompletableFuture.completedFuture(contactCache);
         }
 
-        //TODO: others default properties
-        var jsonObject = new JsonObject();
-        jsonObject.addProperty("jid", id);
-        var contact = new ContactCollectionItem(this, jsonObject);
-        if (!getCollection(ContactCollection.class).tryAddItem(contact))
-            logger.log(Level.SEVERE, "Fail on add contact to collection: " + id);
+        return checkIdExist(id).thenApply(checkIdIsOnWhatsAppResponse -> {
+            if (checkIdIsOnWhatsAppResponse.getStatus() == 200) {
 
-        return CompletableFuture.completedFuture(contact);
+                //TODO: others default properties
+                var jsonObject = new JsonObject();
+                jsonObject.addProperty("jid", id);
+                var contact = new ContactCollectionItem(this, jsonObject);
+                if (!getCollection(ContactCollection.class).tryAddItem(contact)) {
+                    logger.log(Level.SEVERE, "Fail on add contact to collection: " + id);
+                    throw new RuntimeException("Fail on add contact to collection: " + id);
+                }
+
+                return contact;
+            }
+
+            return null;
+        });
     }
 
     public CompletableFuture<byte[]> findProfilePicture(String jid) {
@@ -410,7 +428,7 @@ public class WhatsAppClient extends WebSocketClient {
         });
     }
 
-    public CompletableFuture<JsonElement> updateProfilePicture(File file) {
+    public CompletableFuture<Boolean> updateProfilePicture(File file) {
         try {
             return updateProfilePicture(Util.encodeFile(file));
         } catch (Exception e) {
@@ -419,7 +437,7 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
-    public CompletableFuture<JsonElement> updateProfilePicture(String base64Picture) {
+    public CompletableFuture<Boolean> updateProfilePicture(String base64Picture) {
         try {
             var msgTag = generateMessageTag(false);
 
@@ -438,7 +456,9 @@ public class WhatsAppClient extends WebSocketClient {
                                                     .put(new JSONArray().put("preview").put(JSONObject.NULL).put(Util.scaleImage(Base64.getDecoder().decode(base64Picture), 96, 96)))
                                     )
                     ));
-            return sendBinary(msgTag, Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.picture, BinaryConstants.WA.WAFlag.other), JsonElement.class);
+            return sendBinary(msgTag, Util.GSON.fromJson(actionQuery.toString(), JsonArray.class), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.picture, BinaryConstants.WA.WAFlag.other), JsonObject.class).thenApply(jsonObject -> {
+                return jsonObject.has("status") && jsonObject.get("status").getAsInt() == 200;
+            });
         } catch (Exception e) {
             logger.log(Level.SEVERE, "UpdateProfilePicture", e);
             return CompletableFuture.failedFuture(e);
@@ -786,11 +806,11 @@ public class WhatsAppClient extends WebSocketClient {
             switch (messageSend.getMessageType()) {
                 case TEXT: {
                     if (contextInfo == null) {
-                        msgBuilder.setConversation(messageSend.getText());
+                        msgBuilder.setConversation(Util.emptyStringOrValue(messageSend.getText()));
                     } else {
                         var extendedTextBuilder = ExtendedTextMessage.newBuilder();
                         extendedTextBuilder
-                                .setText(messageSend.getText())
+                                .setText(Util.emptyStringOrValue(messageSend.getText()))
                                 .setContextInfo(contextInfo);
                         msgBuilder.setExtendedTextMessage(extendedTextBuilder);
                     }
@@ -802,7 +822,7 @@ public class WhatsAppClient extends WebSocketClient {
                     locationMsgBuilder
                             .setDegreesLatitude(messageSend.getLocation().getLat())
                             .setDegreesLongitude(messageSend.getLocation().getLng())
-                            .setAddress(messageSend.getLocation().getName());
+                            .setAddress(Util.emptyStringOrValue(messageSend.getLocation().getName()));
                     if (contextInfo != null) {
                         locationMsgBuilder.setContextInfo(contextInfo);
                     }
@@ -1432,10 +1452,12 @@ public class WhatsAppClient extends WebSocketClient {
                                                         if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
                                                             logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
                                                         runOnSync(() -> {
-                                                            if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
-                                                                getCollection(ChatCollection.class).getItem(messageCollectionItem.getRemoteJid()).addMessage(messageCollectionItem);
-                                                            else
-                                                                logger.log(Level.WARNING, "Received new message but chat was not found: " + messageCollectionItem.getId());
+                                                            findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
+                                                                if (chatCollectionItem == null)
+                                                                    logger.log(Level.WARNING, "Received new message but chat was not found: " + messageCollectionItem.getId());
+                                                                else
+                                                                    chatCollectionItem.addMessage(messageCollectionItem);
+                                                            });
                                                         });
                                                         break;
                                                     }
@@ -1459,10 +1481,12 @@ public class WhatsAppClient extends WebSocketClient {
                                                     runOnSync(() -> {
                                                         if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
                                                             logger.log(Level.SEVERE, "Fail on add received last message to collection: " + messageCollectionItem.getId());
-                                                        if (getCollection(ChatCollection.class).hasItem(messageCollectionItem.getRemoteJid()))
-                                                            getCollection(ChatCollection.class).getItem(messageCollectionItem.getRemoteJid()).setLastMessage(messageCollectionItem);
-                                                        else
-                                                            logger.log(Level.WARNING, "Received last message but chat was not found: " + messageCollectionItem.getRemoteJid());
+                                                        findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
+                                                            if (chatCollectionItem == null)
+                                                                logger.log(Level.WARNING, "Received last message but chat was not found: " + messageCollectionItem.getRemoteJid());
+                                                            else
+                                                                chatCollectionItem.setLastMessage(messageCollectionItem);
+                                                        });
                                                     });
                                                 }
                                                 break;

@@ -308,6 +308,12 @@ public class Util {
         return value == null || value.isEmpty();
     }
 
+    public static String emptyStringOrValue(String value) {
+        if (value == null)
+            return "";
+        return value;
+    }
+
     public static boolean isJsonArrayByteArray(JsonArray jsonArray) {
         try {
             Util.GSON.fromJson(jsonArray, byte[].class);

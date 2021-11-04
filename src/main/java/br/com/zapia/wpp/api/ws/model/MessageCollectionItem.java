@@ -2,7 +2,6 @@ package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
 import br.com.zapia.wpp.api.ws.utils.Util;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.time.Instant;
@@ -24,6 +23,7 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
 
     public MessageCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
         super(whatsAppClient, jsonObject);
+        ackType = AckType.PENDING;
     }
 
     public boolean isFromMe() {
@@ -72,14 +72,14 @@ public class MessageCollectionItem extends BaseCollectionItem<MessageCollectionI
     }
 
     @Override
-    void update(MessageCollectionItem baseCollectionItem) {
+    protected void update(MessageCollectionItem baseCollectionItem) {
         ackType = baseCollectionItem.getAckType();
         messageContent = baseCollectionItem.getMessageContent();
     }
 
     @Override
-    void update(JsonElement jsonElement) {
-        ackType = AckType.values()[jsonElement.getAsJsonObject().get("ack").getAsNumber().intValue() + 1];
+    protected void update(JsonObject jsonObject) {
+        ackType = AckType.values()[jsonObject.getAsJsonObject().get("ack").getAsNumber().intValue() + 1];
     }
 
     public enum AckType {

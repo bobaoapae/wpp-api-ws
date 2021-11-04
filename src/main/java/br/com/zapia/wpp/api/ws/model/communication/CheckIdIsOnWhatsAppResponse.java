@@ -1,6 +1,6 @@
 package br.com.zapia.wpp.api.ws.model.communication;
 
-public class CheckNumberExistResponse {
+public class CheckIdIsOnWhatsAppResponse {
 
     private int status;
     private String jid;

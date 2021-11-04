@@ -95,7 +95,7 @@ public abstract class BaseCollection<T extends BaseCollectionItem<T>> {
         synchronized (items) {
             if (items.containsKey(id)) {
                 var current = items.get(id);
-                current.update(item);
+                current.updateFromOther(item);
                 triggerEvent(EventType.CHANGE, List.of(current));
 
                 return true;
@@ -105,11 +105,11 @@ public abstract class BaseCollection<T extends BaseCollectionItem<T>> {
         }
     }
 
-    public boolean changeItem(String id, JsonElement jsonElement) {
+    public boolean changeItem(String id, JsonObject jsonObject) {
         synchronized (items) {
             if (items.containsKey(id)) {
                 var current = items.get(id);
-                current.update(jsonElement);
+                current.updateFromJson(jsonObject);
                 triggerEvent(EventType.CHANGE, List.of(current));
 
                 return true;

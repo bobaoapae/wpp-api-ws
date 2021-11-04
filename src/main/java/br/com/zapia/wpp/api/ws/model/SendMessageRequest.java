@@ -145,7 +145,6 @@ public class SendMessageRequest {
         }
 
         public Builder withLocation(double lat, double lng) {
-            this.messageType = MessageType.LOCATION;
             return withLocation(lat, lng, null);
         }
 
@@ -155,6 +154,7 @@ public class SendMessageRequest {
                 locationBuilderConsumer.accept(builder);
             }
             this.location = builder.build();
+            this.messageType = MessageType.LOCATION;
             return this;
         }
 

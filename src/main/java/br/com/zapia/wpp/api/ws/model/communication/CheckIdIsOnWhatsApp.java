@@ -2,12 +2,10 @@ package br.com.zapia.wpp.api.ws.model.communication;
 
 import br.com.zapia.wpp.api.ws.utils.Util;
 
-public class CheckNumberExistRequest implements IWARequest {
+public record CheckIdIsOnWhatsApp(String jid) implements IWARequest {
 
-    private final String number;
-
-    public CheckNumberExistRequest(String number) {
-        this.number = number;
+    public CheckIdIsOnWhatsApp(String jid) {
+        this.jid = Util.convertJidToSend(jid);
     }
 
     @Override
@@ -15,7 +13,7 @@ public class CheckNumberExistRequest implements IWARequest {
         var data = new Object[]{
                 "query",
                 "exist",
-                number + "@s.whatsapp.net"
+                jid
         };
         return Util.GSON.toJson(data);
     }

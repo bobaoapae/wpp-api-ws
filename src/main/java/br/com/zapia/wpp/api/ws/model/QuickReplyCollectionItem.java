@@ -1,7 +1,6 @@
 package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 public class QuickReplyCollectionItem extends BaseCollectionItem<QuickReplyCollectionItem> {
@@ -29,12 +28,12 @@ public class QuickReplyCollectionItem extends BaseCollectionItem<QuickReplyColle
     }
 
     @Override
-    void update(QuickReplyCollectionItem baseCollectionItem) {
+    protected void update(QuickReplyCollectionItem baseCollectionItem) {
 
     }
 
     @Override
-    void update(JsonElement jsonElement) {
+    protected void update(JsonObject jsonObject) {
 
     }
 }

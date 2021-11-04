@@ -2,7 +2,6 @@ package br.com.zapia.wpp.api.ws.model;
 
 import br.com.zapia.wpp.api.ws.WhatsAppClient;
 import br.com.zapia.wpp.api.ws.utils.Util;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import java.util.List;
@@ -15,7 +14,7 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
 
     protected String id;
     protected transient final WhatsAppClient whatsAppClient;
-    protected transient final JsonObject jsonObject;
+    protected transient JsonObject jsonObject;
     protected transient BaseCollection<T> selfCollection;
 
     public BaseCollectionItem(WhatsAppClient whatsAppClient, JsonObject jsonObject) {
@@ -26,6 +25,14 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
 
     public void setSelfCollection(BaseCollection<T> selfCollection) {
         this.selfCollection = selfCollection;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public JsonObject getJsonObject() {
+        return jsonObject;
     }
 
     public void triggerChange() {
@@ -46,22 +53,20 @@ public abstract class BaseCollectionItem<T extends BaseCollectionItem<T>> {
             id = jsonObject.get("id").getAsString();
     }
 
-    abstract void build();
-
     //TODO: update base properties
+
     public final void updateFromOther(T baseCollectionItem) {
         update(baseCollectionItem);
     }
 
-    abstract void update(T baseCollectionItem);
-
-    abstract void update(JsonElement jsonElement);
-
-    public String getId() {
-        return id;
+    public final void updateFromJson(JsonObject jsonObject) {
+        this.jsonObject = jsonObject;
+        update(jsonObject);
     }
 
-    public JsonObject getJsonObject() {
-        return jsonObject;
-    }
+    abstract void build();
+
+    protected abstract void update(T baseCollectionItem);
+
+    protected abstract void update(JsonObject jsonElement);
 }
