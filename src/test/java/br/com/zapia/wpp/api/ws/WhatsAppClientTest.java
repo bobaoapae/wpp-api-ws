@@ -3,10 +3,11 @@ package br.com.zapia.wpp.api.ws;
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonWriter;
 import org.junit.jupiter.api.*;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -41,6 +42,11 @@ class WhatsAppClientTest {
     @Order(1)
     @Test
     public void createClient() {
+        try {
+            authInfo = loadAuthInfo();
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
         onAuthInfo = new CompletableFuture<>();
         onConnect = new CompletableFuture<>();
         whatsAppClient = new WhatsAppClientBuilder().withOnQrCode(s -> {
@@ -48,10 +54,15 @@ class WhatsAppClientTest {
         }).withOnConnect(() -> {
             onConnect.complete(null);
         }).withOnAuthInfo(authInfo1 -> {
+            try {
+                saveAuthInfo(authInfo1);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             onAuthInfo.complete(authInfo1);
         }).withOnChangeDriverState(driverState -> {
             System.out.println(driverState);
-        }).builder();
+        }).withAuthInfo(authInfo).builder();
         whatsAppClient.connect();
     }
 
@@ -325,6 +336,17 @@ class WhatsAppClientTest {
         while (!whatsAppClient.isClosed()) {
             Thread.sleep(100);
         }
+    }
+
+    private AuthInfo loadAuthInfo() throws FileNotFoundException {
+        if (new File(new File("").getAbsolutePath() + "/cache/authInfo.json").exists()) {
+            return Util.GSON.fromJson(new JsonReader(new FileReader(new File("").getAbsolutePath() + "/cache/authInfo.json")), AuthInfo.class);
+        }
+        return null;
+    }
+
+    private void saveAuthInfo(AuthInfo authInfo) throws IOException {
+        new JsonWriter(new FileWriter(new File("").getAbsolutePath() + "/cache/authInfo.json")).jsonValue(Util.GSON.toJson(authInfo)).close();
     }
 
 }

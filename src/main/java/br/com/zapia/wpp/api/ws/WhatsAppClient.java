@@ -27,6 +27,7 @@ import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.jsoup.Jsoup;
 import org.whispersystems.curve25519.Curve25519;
 
 import javax.crypto.Cipher;
@@ -281,6 +282,141 @@ public class WhatsAppClient extends WebSocketClient {
     private CompletableFuture<InitResponse> sendInit() {
         setDriverState(DriverState.INITIALIZING);
         return sendJson(new InitRequest(authInfo.getClientId()).toJson(), InitResponse.class);
+    }
+
+    private void initNewSession() {
+        try {
+            setDriverState(DriverState.INIT_NEW_SESSION);
+            var keyPair = CURVE_25519.generateKeyPair();
+            authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
+            authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
+            generateQrCode();
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "InitNewSession", e);
+        }
+    }
+
+    private CompletableFuture<LoginResponse> sendLogin() {
+        setDriverState(DriverState.RESTORING_OLD_SESSION);
+        return sendJson(new LoginRequest(authInfo).toJson(), LoginResponse.class);
+    }
+
+    private CompletableFuture<Boolean> respondToChallenge(String challenge) throws Exception {
+        setDriverState(DriverState.RESOLVING_CHALLENGE);
+        var bytes = Base64.getDecoder().decode(challenge);
+
+        var tempCommunicationKeys = generateCommunicationKeys();
+
+        var hmac = Hashing.hmacSha256(tempCommunicationKeys.getMacKey())
+                .newHasher()
+                .putBytes(bytes)
+                .hash().asBytes();
+
+        var signed = Base64.getEncoder().encodeToString(hmac);
+
+        var json = new JSONArray()
+                .put("admin")
+                .put("challenge")
+                .put(signed)
+                .put(authInfo.getServerToken())
+                .put(authInfo.getClientId());
+
+        return sendJson(json.toString(), JsonObject.class).thenApply(jsonObject -> {
+            if (jsonObject.get("status").getAsInt() == 200)
+                return true;
+
+            logger.log(Level.SEVERE, "Failed to resolve challenge {status: " + jsonObject.get("status") + "}, starting a new one");
+            return false;
+        });
+    }
+
+    private void generateQrCode() {
+        try {
+            var stringQrCode = serverId + "," + authInfo.getPublicKey() + "," + authInfo.getClientId();
+            var barcodeWriter = new QRCodeWriter();
+            var bitMatrix = barcodeWriter.encode(stringQrCode, BarcodeFormat.QR_CODE, 400, 400);
+            var outputStream = new ByteArrayOutputStream();
+            MatrixToImageWriter.writeToStream(bitMatrix, "png", outputStream);
+            lastQrCode = "data:image/png;base64," + Base64.getEncoder().encodeToString(outputStream.toByteArray());
+            if (onQrCode != null) {
+                executorService.submit(runnableFactory.apply(() -> {
+                    onQrCode.accept(lastQrCode);
+                }));
+            }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "GenerateQrCode", e);
+            close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to error on generate QrCode");
+        }
+    }
+
+    private CompletableFuture<RefreshQrResponse> refreshQrCode() {
+        return sendJson(new RefreshQrRequest().toJson(), RefreshQrResponse.class);
+    }
+
+    private CommunicationKeys generateCommunicationKeys() throws Exception {
+        try {
+            var decodedSecret = Base64.getDecoder().decode(authInfo.getSecret());
+            if (decodedSecret.length != 144) {
+                throw new Exception("incorrect secret length received: " + decodedSecret.length);
+            }
+
+            var sharedKey = CURVE_25519.calculateAgreement(Arrays.copyOf(decodedSecret, 32), Base64.getDecoder().decode(authInfo.getPrivateKey()));
+
+            var expandedKey = Util.hkdfExpand(sharedKey, 80, null);
+
+            var hmacValidationKey = Arrays.copyOfRange(expandedKey, 32, 64);
+
+            var hmacValidationMessage = Bytes.concat(Arrays.copyOf(decodedSecret, 32), Arrays.copyOfRange(decodedSecret, 64, decodedSecret.length));
+
+
+            var hmac = Hashing.hmacSha256(hmacValidationKey)
+                    .newHasher()
+                    .putBytes(hmacValidationMessage)
+                    .hash().asBytes();
+
+            if (!Arrays.equals(hmac, Arrays.copyOfRange(decodedSecret, 32, 64))) {
+                throw new Exception("HMAC Validation Failed");
+            }
+
+            var keysEncrypted = Bytes.concat(Arrays.copyOfRange(expandedKey, 64, expandedKey.length), Arrays.copyOfRange(decodedSecret, 64, decodedSecret.length));
+
+
+            byte[] key = Arrays.copyOf(expandedKey, 32);
+
+            SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+            byte[] iv = Arrays.copyOf(keysEncrypted, 16);
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
+
+            var keysDecrypted = cipher.doFinal(Arrays.copyOfRange(keysEncrypted, 16, keysEncrypted.length));
+
+            var encKey = Arrays.copyOf(keysDecrypted, 32);
+            var macKey = Arrays.copyOfRange(keysDecrypted, 32, 64);
+
+            return new CommunicationKeys(sharedKey, expandedKey, keysEncrypted, keysDecrypted, encKey, macKey);
+
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "GenerateCommunicationKeys", e);
+            throw e;
+        }
+    }
+
+    //See WhatsApp Web {openStream} function
+    private CompletableFuture<Void> syncCollections() {
+        setDriverState(DriverState.WAITING_SYNC);
+        /*sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), JsonElement.class).thenAccept(jsonElement -> {
+            System.out.println(jsonElement);
+        });*/
+        var chat = getCollection(ChatCollection.class).sync();
+        var contact = getCollection(ContactCollection.class).sync();
+        var quickReply = authInfo.isBusiness() ? getCollection(QuickReplyCollection.class).sync() : CompletableFuture.allOf();
+        return CompletableFuture.allOf(chat, contact, quickReply);
+        /**
+         * sendBinary(new BaseQuery("status", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryStatus, BinaryConstants.WA.WAFlag.ignore), null);
+         *             if (authInfo.isBusiness()) {
+         *                 sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), null);
+         *             }
+         */
     }
 
     public CompletableFuture<JsonElement> sendPresence(PresenceType presenceType) {
@@ -816,6 +952,44 @@ public class WhatsAppClient extends WebSocketClient {
                     }
                     return CompletableFuture.completedFuture(msgBuilder);
                 }
+                case EXTENDED_TEXT: {
+                    var extendedTextBuilder = ExtendedTextMessage.newBuilder();
+                    extendedTextBuilder
+                            .setText(Util.emptyStringOrValue(messageSend.getText()))
+                            .setCanonicalUrl(messageSend.getWebSite())
+                            .setMatchedText(messageSend.getWebSite());
+                    var docWebSite = Jsoup.connect(messageSend.getWebSite()).get();
+                    var title = docWebSite.title();
+                    var description = docWebSite.select("meta[name=description]").first();
+                    var image = docWebSite.select("meta[property=og:image]").first();
+
+                    if (image != null) {
+                        HttpRequest httpRequest = HttpRequest.newBuilder()
+                                .header("Origin", Constants.ORIGIN_WS)
+                                .GET()
+                                .uri(URI.create(image.attr("content")))
+                                .build();
+
+                        var client = HttpClient.newHttpClient();
+                        var response = client.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+                        if (response.statusCode() >= 400) {
+                            logger.log(Level.WARNING, "Fail on download image logo to build website preview message");
+                        } else {
+                            extendedTextBuilder.setJpegThumbnail(ByteString.copyFrom(response.body()));
+                        }
+                    }
+
+                    if (description != null) {
+                        extendedTextBuilder.setDescription(description.attr("content"));
+                    }
+
+                    extendedTextBuilder.setTitle(Util.emptyStringOrValue(title));
+                    if (contextInfo != null) {
+                        extendedTextBuilder.setContextInfo(contextInfo);
+                    }
+                    msgBuilder.setExtendedTextMessage(extendedTextBuilder);
+                    return CompletableFuture.completedFuture(msgBuilder);
+                }
                 case LOCATION:
                 case LIVE_LOCATION: {
                     var locationMsgBuilder = LocationMessage.newBuilder();
@@ -1171,139 +1345,6 @@ public class WhatsAppClient extends WebSocketClient {
         }, executorService);
     }
 
-    private void initNewSession() {
-        try {
-            setDriverState(DriverState.INIT_NEW_SESSION);
-            var keyPair = CURVE_25519.generateKeyPair();
-            authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
-            authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
-            generateQrCode();
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "InitNewSession", e);
-        }
-    }
-
-    private CompletableFuture<LoginResponse> sendLogin() {
-        setDriverState(DriverState.RESTORING_OLD_SESSION);
-        return sendJson(new LoginRequest(authInfo).toJson(), LoginResponse.class);
-    }
-
-    private void generateQrCode() {
-        try {
-            var stringQrCode = serverId + "," + authInfo.getPublicKey() + "," + authInfo.getClientId();
-            var barcodeWriter = new QRCodeWriter();
-            var bitMatrix = barcodeWriter.encode(stringQrCode, BarcodeFormat.QR_CODE, 400, 400);
-            var outputStream = new ByteArrayOutputStream();
-            MatrixToImageWriter.writeToStream(bitMatrix, "png", outputStream);
-            lastQrCode = "data:image/png;base64," + Base64.getEncoder().encodeToString(outputStream.toByteArray());
-            if (onQrCode != null) {
-                executorService.submit(runnableFactory.apply(() -> {
-                    onQrCode.accept(lastQrCode);
-                }));
-            }
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "GenerateQrCode", e);
-            close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to error on generate QrCode");
-        }
-    }
-
-    private CompletableFuture<RefreshQrResponse> refreshQrCode() {
-        return sendJson(new RefreshQrRequest().toJson(), RefreshQrResponse.class);
-    }
-
-    //See WhatsApp Web {openStream} function
-    private CompletableFuture<Void> syncCollections() {
-        setDriverState(DriverState.WAITING_SYNC);
-        /*sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), JsonElement.class).thenAccept(jsonElement -> {
-            System.out.println(jsonElement);
-        });*/
-        var chat = getCollection(ChatCollection.class).sync();
-        var contact = getCollection(ContactCollection.class).sync();
-        var quickReply = authInfo.isBusiness() ? getCollection(QuickReplyCollection.class).sync() : CompletableFuture.allOf();
-        return CompletableFuture.allOf(chat, contact, quickReply);
-        /**
-         * sendBinary(new BaseQuery("status", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryStatus, BinaryConstants.WA.WAFlag.ignore), null);
-         *             if (authInfo.isBusiness()) {
-         *                 sendBinary(new BaseQuery("quick_reply", "1", null).toJsonArray(), new BinaryConstants.WA.WATags(BinaryConstants.WA.WAMetric.queryQuickReply, BinaryConstants.WA.WAFlag.ignore), null);
-         *             }
-         */
-    }
-
-    private void generateCommunicationKeys() {
-        try {
-            var decodedSecret = Base64.getDecoder().decode(authInfo.getSecret());
-            if (decodedSecret.length != 144) {
-                throw new Exception("incorrect secret length received: " + decodedSecret.length);
-            }
-
-            var sharedKey = CURVE_25519.calculateAgreement(Arrays.copyOf(decodedSecret, 32), Base64.getDecoder().decode(authInfo.getPrivateKey()));
-
-            var expandedKey = Util.hkdfExpand(sharedKey, 80, null);
-
-            var hmacValidationKey = Arrays.copyOfRange(expandedKey, 32, 64);
-
-            var hmacValidationMessage = Bytes.concat(Arrays.copyOf(decodedSecret, 32), Arrays.copyOfRange(decodedSecret, 64, decodedSecret.length));
-
-
-            var hmac = Hashing.hmacSha256(hmacValidationKey)
-                    .newHasher()
-                    .putBytes(hmacValidationMessage)
-                    .hash().asBytes();
-
-            if (!Arrays.equals(hmac, Arrays.copyOfRange(decodedSecret, 32, 64))) {
-                throw new Exception("HMAC Validation Failed");
-            }
-
-            var keysEncrypted = Bytes.concat(Arrays.copyOfRange(expandedKey, 64, expandedKey.length), Arrays.copyOfRange(decodedSecret, 64, decodedSecret.length));
-
-
-            byte[] key = Arrays.copyOf(expandedKey, 32);
-
-            SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
-            byte[] iv = Arrays.copyOf(keysEncrypted, 16);
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING");
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
-
-            var keysDecrypted = cipher.doFinal(Arrays.copyOfRange(keysEncrypted, 16, keysEncrypted.length));
-
-            var encKey = Arrays.copyOf(keysDecrypted, 32);
-            var macKey = Arrays.copyOfRange(keysDecrypted, 32, 64);
-
-            communicationKeys = new CommunicationKeys(sharedKey, expandedKey, keysEncrypted, keysDecrypted, encKey, macKey);
-            connectTime = LocalDateTime.now();
-
-            executorService.submit(runnableFactory.apply(() -> {
-                sendPresence(PresenceType.AVAILABLE);
-                syncCollections().thenAccept(unused -> {
-                    synchronized (syncIsSynced) {
-                        for (Runnable runnable : runnableOnConnect) {
-                            try {
-                                runnable.run();
-                            } catch (Exception e) {
-                                logger.log(Level.SEVERE, "Failed to run", e);
-                            }
-                        }
-                        runnableOnConnect.clear();
-                        isSynced = true;
-                    }
-                    if (onConnect != null) {
-                        onConnect.run();
-                    }
-                    setDriverState(DriverState.CONNECTED);
-                });
-            }));
-
-            if (onAuthInfo != null) {
-                executorService.submit(runnableFactory.apply(() -> {
-                    onAuthInfo.accept(authInfo);
-                }));
-            }
-
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "GenerateCommunicationKeys", e);
-        }
-    }
-
     private void startKeepAlive() {
         keepAliveScheduled = schedule(() -> {
             if (lastSeen == null) lastSeen = LocalDateTime.now();
@@ -1538,6 +1579,22 @@ public class WhatsAppClient extends WebSocketClient {
                 } else if (jsonElement.isJsonArray()) {
                     var jsonArray = jsonElement.getAsJsonArray();
                     switch (jsonArray.get(0).getAsString()) {
+                        case "Cmd":
+                            var cmdObj = jsonArray.get(1).getAsJsonObject();
+                            switch (cmdObj.get("type").getAsString()) {
+                                case "challenge":
+                                    var challenge = cmdObj.get("challenge").getAsString();
+                                    respondToChallenge(challenge).thenAccept(aBoolean -> {
+                                        if (!aBoolean)
+                                            close(CloseFrame.REFUSE, "Error on resolve challenge");
+                                    });
+                                    break;
+                                default:
+                                    logger.log(Level.WARNING, "Received unexpected cmd tag: {" + cmdObj.get("type").getAsString() + "} with content: {" + cmdObj + "}");
+                            }
+                            break;
+                        case "Stream":
+                            break;
                         case "Conn":
                             if (refreshQrCodeScheduler != null) {
                                 refreshQrCodeScheduler.cancel(true);
@@ -1553,9 +1610,36 @@ public class WhatsAppClient extends WebSocketClient {
                             authInfo.setPushName(connResponse.getPushname());
                             authInfo.setWid(connResponse.getWid());
                             authInfo.setBusiness(connResponse.getPlatform().contains("smb"));
-                            generateCommunicationKeys();
-                            break;
-                        case "Stream":
+                            communicationKeys = generateCommunicationKeys();
+
+                            connectTime = LocalDateTime.now();
+
+                            executorService.submit(runnableFactory.apply(() -> {
+                                sendPresence(PresenceType.AVAILABLE);
+                                syncCollections().thenAccept(unused -> {
+                                    synchronized (syncIsSynced) {
+                                        for (Runnable runnable : runnableOnConnect) {
+                                            try {
+                                                runnable.run();
+                                            } catch (Exception e) {
+                                                logger.log(Level.SEVERE, "Failed to run", e);
+                                            }
+                                        }
+                                        runnableOnConnect.clear();
+                                        isSynced = true;
+                                    }
+                                    if (onConnect != null) {
+                                        onConnect.run();
+                                    }
+                                    setDriverState(DriverState.CONNECTED);
+                                });
+                            }));
+
+                            if (onAuthInfo != null) {
+                                executorService.submit(runnableFactory.apply(() -> {
+                                    onAuthInfo.accept(authInfo);
+                                }));
+                            }
                             break;
                         case "Props":
                             break;
