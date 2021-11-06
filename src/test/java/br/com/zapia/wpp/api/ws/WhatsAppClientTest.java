@@ -20,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WhatsAppClientTest {
 
+    private static final String number = "";
+
     private WhatsAppClient whatsAppClient;
     private CompletableFuture<AuthInfo> onAuthInfo;
     private CompletableFuture<Void> onConnect;
@@ -82,14 +84,14 @@ class WhatsAppClientTest {
     @Order(4)
     @Test
     public void checkNumberExist() throws ExecutionException, InterruptedException, TimeoutException {
-        var result = whatsAppClient.checkNumberExist("5544991050665").get(30, TimeUnit.SECONDS);
+        var result = whatsAppClient.checkNumberExist(number).get(30, TimeUnit.SECONDS);
         assertEquals(result.getStatus(), 200);
     }
 
     @Order(5)
     @Test
     public void findChatFromNumber() throws ExecutionException, InterruptedException, TimeoutException {
-        chatCollectionItem = whatsAppClient.findChatFromNumber("5544991050665").get(30, TimeUnit.SECONDS);
+        chatCollectionItem = whatsAppClient.findChatFromNumber(number).get(30, TimeUnit.SECONDS);
         assertNotNull(chatCollectionItem);
     }
 
@@ -103,68 +105,68 @@ class WhatsAppClientTest {
     @Order(7)
     @Test
     public void sendTextMessage() throws ExecutionException, InterruptedException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").build()).get(30, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withText("teste").build()).get(30, TimeUnit.SECONDS);
     }
 
     @Order(8)
     @Test
     public void sendDocumentMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("pom.xml")).build()).get(30, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("pom.xml")).build()).get(30, TimeUnit.SECONDS);
     }
 
     @Order(9)
     @Test
     public void sendImageMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("img.png")).build()).get(30, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("img.png")).build()).get(30, TimeUnit.SECONDS);
     }
 
     @Order(10)
     @Test
     public void sendSticker() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("img.png"), fileBuilder -> fileBuilder.withForceSticker(true)).build()).get(30, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("img.png"), fileBuilder -> fileBuilder.withForceSticker(true)).build()).get(30, TimeUnit.SECONDS);
     }
 
     @Order(11)
     @Test
     public void sendVideoMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("video.mp4")).build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("video.mp4")).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(12)
     @Test
     public void sendGifMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("video.mp4"), fileBuilder -> fileBuilder.withForceGif(true)).build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("video.mp4"), fileBuilder -> fileBuilder.withForceGif(true)).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(13)
     @Test
     public void sendAudioMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("audio.ogg")).build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("audio.ogg")).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(14)
     @Test
     public void sendPttMessage() throws ExecutionException, InterruptedException, TimeoutException, IOException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withFile(new File("audio.ogg"), fileBuilder -> fileBuilder.withForcePtt(true)).build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withFile(new File("audio.ogg"), fileBuilder -> fileBuilder.withForcePtt(true)).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(15)
     @Test
     public void sendContactMsg() throws ExecutionException, InterruptedException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withVCard("João", "5544991050665").build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withVCard("João", number).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(16)
     @Test
     public void sendButtonMsg() throws ExecutionException, InterruptedException, TimeoutException {
-        var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withButtons("title", "footer", buttonsBuilder -> buttonsBuilder.withButton("button1").withButton("button2").withButton("button3")).build()).get(60, TimeUnit.SECONDS);
+        var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withButtons("title", "footer", buttonsBuilder -> buttonsBuilder.withButton("button1").withButton("button2").withButton("button3")).build()).get(60, TimeUnit.SECONDS);
     }
 
     @Order(17)
     @Test
     public void sendListMsg() throws ExecutionException, InterruptedException, TimeoutException {
         if (!authInfo.isBusiness()) {
-            var message = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withList(listBuilder -> {
+            var message = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withList(listBuilder -> {
                 listBuilder
                         .withTitle("Title")
                         .withDescription("Description")
@@ -222,7 +224,7 @@ class WhatsAppClientTest {
     @Order(21)
     @Test
     public void sendQuotedMessage() throws InterruptedException, ExecutionException, TimeoutException {
-        lastMsgSend = whatsAppClient.sendMessage("554491050665@c.us", new SendMessageRequest.Builder().withText("teste").withQuotedMsg(msgReceived).build()).get(60, TimeUnit.SECONDS);
+        lastMsgSend = whatsAppClient.sendMessage(chatCollectionItem, new SendMessageRequest.Builder().withText("teste").withQuotedMsg(msgReceived).build()).get(60, TimeUnit.SECONDS);
         assertNotNull(lastMsgSend);
     }
 
