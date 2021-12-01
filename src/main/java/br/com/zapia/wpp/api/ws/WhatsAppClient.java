@@ -29,8 +29,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.whispersystems.curve25519.Curve25519;
+import org.whispersystems.curve25519.Curve25519KeyPair;
 
+import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
@@ -41,6 +45,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -78,11 +85,17 @@ public class WhatsAppClient extends WebSocketClient {
     private final Map<String, CompletableFuture<JsonElement>> wsEvents;
     private final List<Runnable> runnableOnConnect;
     private boolean isSynced;
+    private final boolean autoReconnect;
+    private boolean mdVersion;
 
     private String serverId;
     private AuthInfo authInfo;
     private CommunicationKeys communicationKeys;
     private String lastQrCode;
+
+    private final AtomicReference<CompletableFuture<byte[]>> awaiterNexMessage;
+    private NoiseHandler noiseHandler;
+    private Curve25519KeyPair ephemeralKeyPair;
 
     private DriverState driverState;
     private int msgCount;
@@ -117,6 +130,8 @@ public class WhatsAppClient extends WebSocketClient {
         this.runnableOnConnect = new ArrayList<>();
         this.syncIsSynced = new Object();
         this.syncPresence = new Object();
+        this.autoReconnect = true;
+        this.awaiterNexMessage = new AtomicReference<>();
         setDriverState(DriverState.UNLOADED);
         setConnectionLostTimeout(0);
         getHeadersConnectWs().forEach(this::addHeader);
@@ -160,6 +175,24 @@ public class WhatsAppClient extends WebSocketClient {
             }
         }
     }
+
+    public CompletableFuture<byte[]> sendAndAwaitNextMessage(byte[] data) {
+        var response = new CompletableFuture<byte[]>();
+        awaiterNexMessage.set(response);
+        try {
+            sendRawMessage(data);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "SendAndAwaitNextMessage", e);
+            response.completeExceptionally(e);
+        }
+        return response;
+    }
+
+    public void sendRawMessage(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
+        var bytes = noiseHandler.encodeFrame(data);
+        send(bytes);
+    }
+
 
     public <T> CompletableFuture<T> sendJson(String data, Class<T> responseType) {
         return sendJson(generateMessageTag(false), data, responseType);
@@ -235,44 +268,54 @@ public class WhatsAppClient extends WebSocketClient {
 
     private void initLogin() {
         try {
-            createCollections();
-            if (authInfo == null) {
-                byte[] bytes = new byte[16];
-                SecureRandom.getInstanceStrong().nextBytes(bytes);
-                var clientId = Base64.getEncoder().encodeToString(bytes);
-                authInfo = new AuthInfo();
-                authInfo.setClientId(clientId);
-            }
-            startKeepAlive();
-            sendInit().thenAccept(initResponse -> {
-                if (initResponse.getStatus() == 200) {
-                    serverId = initResponse.getRef();
-                    refreshQrCodeScheduler = schedule(() -> {
-                        refreshQrCode().thenAccept(refreshQrResponse -> {
-                            if (refreshQrResponse.getStatus() != 200) {
-                                close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to many QR refresh");
-                            } else {
-                                logger.log(Level.INFO, "QrCode expired generating new one");
-                                serverId = refreshQrResponse.getRef();
-                                generateQrCode();
-                            }
-                        });
-                    }, initResponse.getTtl(), initResponse.getTtl(), TimeUnit.MILLISECONDS);
-                    if (authInfo.getSecret() == null) {
-                        initNewSession();
-                    } else {
-                        sendLogin().thenAccept(loginResponse -> {
-                            if (loginResponse.getStatus() != 200) {
-                                logger.log(Level.WARNING, "Failed to restore previous session {status: " + loginResponse.getStatus() + "}, starting a new one");
-                                initNewSession();
-                            }
-                        });
-                    }
-                } else {
-                    logger.log(Level.SEVERE, "Init returned unexpected status: " + initResponse.getStatus());
-                    close(CloseFrame.ABNORMAL_CLOSE, "Init returned unexpected status: " + initResponse.getStatus());
+            if (mdVersion) {
+                ephemeralKeyPair = CURVE_25519.generateKeyPair();
+                noiseHandler = new NoiseHandler(ephemeralKeyPair);
+                sendInitMD().thenAccept(handshakeMessage -> {
+                    //TODO: processHandshake
+                    //TODO: send registrationNode or loginNode
+                    //TODO: startKeepAlive
+                });
+            } else {
+                createCollections();
+                if (authInfo == null) {
+                    byte[] bytes = new byte[16];
+                    SecureRandom.getInstanceStrong().nextBytes(bytes);
+                    var clientId = Base64.getEncoder().encodeToString(bytes);
+                    authInfo = new AuthInfo();
+                    authInfo.setClientId(clientId);
                 }
-            });
+                startKeepAlive();
+                sendInit().thenAccept(initResponse -> {
+                    if (initResponse.getStatus() == 200) {
+                        serverId = initResponse.getRef();
+                        refreshQrCodeScheduler = schedule(() -> {
+                            refreshQrCode().thenAccept(refreshQrResponse -> {
+                                if (refreshQrResponse.getStatus() != 200) {
+                                    close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to many QR refresh");
+                                } else {
+                                    logger.log(Level.INFO, "QrCode expired generating new one");
+                                    serverId = refreshQrResponse.getRef();
+                                    generateQrCode();
+                                }
+                            });
+                        }, initResponse.getTtl(), initResponse.getTtl(), TimeUnit.MILLISECONDS);
+                        if (authInfo.getSecret() == null) {
+                            initNewSession();
+                        } else {
+                            sendLogin().thenAccept(loginResponse -> {
+                                if (loginResponse.getStatus() != 200) {
+                                    logger.log(Level.WARNING, "Failed to restore previous session {status: " + loginResponse.getStatus() + "}, starting a new one");
+                                    initNewSession();
+                                }
+                            });
+                        }
+                    } else {
+                        logger.log(Level.SEVERE, "Init returned unexpected status: " + initResponse.getStatus());
+                        close(CloseFrame.ABNORMAL_CLOSE, "Init returned unexpected status: " + initResponse.getStatus());
+                    }
+                });
+            }
         } catch (Exception e) {
             logger.log(Level.SEVERE, "InitLogin", e);
             close(CloseFrame.ABNORMAL_CLOSE, "A error was occurred on initLogin, check logs to find the reason");
@@ -282,6 +325,20 @@ public class WhatsAppClient extends WebSocketClient {
     private CompletableFuture<InitResponse> sendInit() {
         setDriverState(DriverState.INITIALIZING);
         return sendJson(new InitRequest(authInfo.getClientId()).toJson(), InitResponse.class);
+    }
+
+    private CompletableFuture<HandshakeMessage> sendInitMD() {
+        setDriverState(DriverState.INITIALIZING);
+
+        var init = HandshakeMessage.newBuilder().setClientHello(ClientHello.newBuilder().setEphemeral(ByteString.copyFrom(ephemeralKeyPair.getPublicKey()))).build();
+        return sendAndAwaitNextMessage(init.toByteArray()).thenApply(bytes -> {
+            try {
+                return HandshakeMessage.parseFrom(bytes);
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "sendInitMD", e);
+                throw new CompletionException(e);
+            }
+        });
     }
 
     private void initNewSession() {
@@ -1402,153 +1459,164 @@ public class WhatsAppClient extends WebSocketClient {
 
     @Override
     public void onOpen(ServerHandshake handshakedata) {
+        wsEvents.clear();
+        collections.clear();
         initLogin();
     }
 
     @Override
     public void onMessage(ByteBuffer bytes) {
         try {
-            var byteArray = bytes.array();
-            int commaIndex = -1;
-            for (int i = 0; i < byteArray.length; i++) {
-                if (byteArray[i] == (byte) ',') {
-                    commaIndex = i;
-                    break;
-                }
-            }
-
-            if (commaIndex > 0) {
-                var bytesTag = Arrays.copyOf(byteArray, commaIndex);
-                var bytesMsg = Arrays.copyOfRange(byteArray, commaIndex + 1, byteArray.length);
-                var msgTag = new String(bytesTag);
-
-                if (communicationKeys == null) {
-                    throw new IllegalStateException("Received encrypted buffer without communicationKeys");
-                }
-
-                var checksum = Arrays.copyOf(bytesMsg, 32);
-                var data = Arrays.copyOfRange(bytesMsg, 32, bytesMsg.length);
-
-                var hmac = Hashing.hmacSha256(communicationKeys.getMacKey())
-                        .newHasher()
-                        .putBytes(data)
-                        .hash().asBytes();
-
-                if (!Arrays.equals(hmac, checksum)) {
-                    throw new Exception("HMAC Validation Failed");
-                }
-
-                var decryptedBytes = Util.decryptWa(communicationKeys.getEncKey(), data);
-
-                var binaryDecoder = new WABinaryDecoder(decryptedBytes);
-                var jsonDecoded = binaryDecoder.read();
-
-                if (wsEvents.containsKey(msgTag)) {
-                    var response = wsEvents.get(msgTag);
-                    executorService.submit(runnableFactory.apply(() -> {
-                        response.complete(jsonDecoded);
-                    }));
-                } else {
-                    var binaryType = jsonDecoded.get(0).getAsString();
-                    switch (binaryType) {
-                        case "response": {
-                            var duplicate = jsonDecoded.get(1).getAsJsonObject().get("duplicate");
-                            var responseType = jsonDecoded.get(1).getAsJsonObject().get("type").getAsString();
-                            if (duplicate != null && duplicate.getAsBoolean()) {
-                                logger.log(Level.INFO, "Received duplicated response: " + responseType);
-                                return;
-                            }
-                            switch (responseType) {
-                                case "chat": {
-                                    var chatCollection = getCollection(ChatCollection.class);
-                                    chatCollection.getSyncFuture().complete(jsonDecoded);
-                                    break;
-                                }
-                                case "contacts": {
-                                    var contactCollection = getCollection(ContactCollection.class);
-                                    contactCollection.getSyncFuture().complete(jsonDecoded);
-                                    break;
-                                }
-                                default:
-                                    logger.log(Level.WARNING, "Received unexpected Binary Response type: {" + responseType + "} - with content: {" + jsonDecoded + "}");
-                            }
-                            break;
-                        }
-                        case "action": {
-                            var actionsGrouped = Util.groupActionsByType(jsonDecoded.get(2).getAsJsonArray());
-                            for (String key : actionsGrouped.keySet()) {
-                                var current = actionsGrouped.getAsJsonArray(key);
-                                switch (key) {
-                                    case "msg": {
-                                        var addType = jsonDecoded.get(1).getAsJsonObject().get("add").getAsString();
-                                        switch (addType) {
-                                            case "relay":
-                                            case "update": {
-                                                var msgBuilder = WebMessageInfo.newBuilder();
-                                                JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(current.get(0).getAsJsonArray().get(2).getAsJsonObject()), msgBuilder);
-                                                var msg = msgBuilder.build();
-                                                var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
-                                                switch (addType) {
-                                                    case "relay": {
-                                                        if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
-                                                            logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
-                                                        runOnSync(() -> {
-                                                            findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
-                                                                if (chatCollectionItem == null)
-                                                                    logger.log(Level.WARNING, "Received new message but chat was not found: " + messageCollectionItem.getId());
-                                                                else
-                                                                    chatCollectionItem.addMessage(messageCollectionItem);
-                                                            });
-                                                        });
-                                                        break;
-                                                    }
-                                                    case "update": {
-                                                        runOnSync(() -> {
-                                                            if (!getCollection(MessageCollection.class).changeItem(messageCollectionItem.getId(), messageCollectionItem))
-                                                                logger.log(Level.SEVERE, "Fail on update received message: " + messageCollectionItem.getId());
-                                                        });
-                                                        break;
-                                                    }
-                                                }
-                                                break;
-                                            }
-                                            case "last": {
-                                                for (int i = 0; i < current.size(); i++) {
-                                                    var msgObj = current.get(i).getAsJsonArray().get(2).getAsJsonObject();
-                                                    var msgBuilder = WebMessageInfo.newBuilder();
-                                                    JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(msgObj), msgBuilder);
-                                                    var msg = msgBuilder.build();
-                                                    var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
-                                                    runOnSync(() -> {
-                                                        if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
-                                                            logger.log(Level.SEVERE, "Fail on add received last message to collection: " + messageCollectionItem.getId());
-                                                        findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
-                                                            if (chatCollectionItem == null)
-                                                                logger.log(Level.WARNING, "Received last message but chat was not found: " + messageCollectionItem.getRemoteJid());
-                                                            else
-                                                                chatCollectionItem.setLastMessage(messageCollectionItem);
-                                                        });
-                                                    });
-                                                }
-                                                break;
-                                            }
-
-                                            default:
-                                                logger.log(Level.WARNING, "Received unexpected action msg type: {" + addType + "} - with content: {" + current + "}");
-                                        }
-                                        break;
-                                    }
-                                    default:
-                                        logger.log(Level.WARNING, "Received unexpected action type: {" + key + "} - with content: {" + actionsGrouped.get(key) + "}");
-                                }
-                            }
-                            break;
-                        }
-                        default:
-                            logger.log(Level.WARNING, "Received unexpected Binary type: {" + binaryType + "} - with content: {" + jsonDecoded + "}");
+            if (mdVersion) {
+                noiseHandler.decodeFrame(bytes.array(), bytes1 -> {
+                    var awaiter = awaiterNexMessage.getAndSet(null);
+                    if (awaiter != null) {
+                        awaiter.complete(bytes1);
+                    }
+                });
+            } else {
+                var byteArray = bytes.array();
+                int commaIndex = -1;
+                for (int i = 0; i < byteArray.length; i++) {
+                    if (byteArray[i] == (byte) ',') {
+                        commaIndex = i;
+                        break;
                     }
                 }
 
+                if (commaIndex > 0) {
+                    var bytesTag = Arrays.copyOf(byteArray, commaIndex);
+                    var bytesMsg = Arrays.copyOfRange(byteArray, commaIndex + 1, byteArray.length);
+                    var msgTag = new String(bytesTag);
+
+                    if (communicationKeys == null) {
+                        throw new IllegalStateException("Received encrypted buffer without communicationKeys");
+                    }
+
+                    var checksum = Arrays.copyOf(bytesMsg, 32);
+                    var data = Arrays.copyOfRange(bytesMsg, 32, bytesMsg.length);
+
+                    var hmac = Hashing.hmacSha256(communicationKeys.getMacKey())
+                            .newHasher()
+                            .putBytes(data)
+                            .hash().asBytes();
+
+                    if (!Arrays.equals(hmac, checksum)) {
+                        throw new Exception("HMAC Validation Failed");
+                    }
+
+                    var decryptedBytes = Util.decryptWa(communicationKeys.getEncKey(), data);
+
+                    var binaryDecoder = new WABinaryDecoder(decryptedBytes);
+                    var jsonDecoded = binaryDecoder.read();
+
+                    if (wsEvents.containsKey(msgTag)) {
+                        var response = wsEvents.get(msgTag);
+                        executorService.submit(runnableFactory.apply(() -> {
+                            response.complete(jsonDecoded);
+                        }));
+                    } else {
+                        var binaryType = jsonDecoded.get(0).getAsString();
+                        switch (binaryType) {
+                            case "response": {
+                                var duplicate = jsonDecoded.get(1).getAsJsonObject().get("duplicate");
+                                var responseType = jsonDecoded.get(1).getAsJsonObject().get("type").getAsString();
+                                if (duplicate != null && duplicate.getAsBoolean()) {
+                                    logger.log(Level.INFO, "Received duplicated response: " + responseType);
+                                    return;
+                                }
+                                switch (responseType) {
+                                    case "chat": {
+                                        var chatCollection = getCollection(ChatCollection.class);
+                                        chatCollection.getSyncFuture().complete(jsonDecoded);
+                                        break;
+                                    }
+                                    case "contacts": {
+                                        var contactCollection = getCollection(ContactCollection.class);
+                                        contactCollection.getSyncFuture().complete(jsonDecoded);
+                                        break;
+                                    }
+                                    default:
+                                        logger.log(Level.WARNING, "Received unexpected Binary Response type: {" + responseType + "} - with content: {" + jsonDecoded + "}");
+                                }
+                                break;
+                            }
+                            case "action": {
+                                var actionsGrouped = Util.groupActionsByType(jsonDecoded.get(2).getAsJsonArray());
+                                for (String key : actionsGrouped.keySet()) {
+                                    var current = actionsGrouped.getAsJsonArray(key);
+                                    switch (key) {
+                                        case "msg": {
+                                            var addType = jsonDecoded.get(1).getAsJsonObject().get("add").getAsString();
+                                            switch (addType) {
+                                                case "relay":
+                                                case "update": {
+                                                    var msgBuilder = WebMessageInfo.newBuilder();
+                                                    JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(current.get(0).getAsJsonArray().get(2).getAsJsonObject()), msgBuilder);
+                                                    var msg = msgBuilder.build();
+                                                    var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
+                                                    switch (addType) {
+                                                        case "relay": {
+                                                            if (!getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
+                                                                logger.log(Level.SEVERE, "Fail on add received message to collection: " + messageCollectionItem.getId());
+                                                            runOnSync(() -> {
+                                                                findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
+                                                                    if (chatCollectionItem == null)
+                                                                        logger.log(Level.WARNING, "Received new message but chat was not found: " + messageCollectionItem.getId());
+                                                                    else
+                                                                        chatCollectionItem.addMessage(messageCollectionItem);
+                                                                });
+                                                            });
+                                                            break;
+                                                        }
+                                                        case "update": {
+                                                            runOnSync(() -> {
+                                                                if (!getCollection(MessageCollection.class).changeItem(messageCollectionItem.getId(), messageCollectionItem))
+                                                                    logger.log(Level.SEVERE, "Fail on update received message: " + messageCollectionItem.getId());
+                                                            });
+                                                            break;
+                                                        }
+                                                    }
+                                                    break;
+                                                }
+                                                case "last": {
+                                                    for (int i = 0; i < current.size(); i++) {
+                                                        var msgObj = current.get(i).getAsJsonArray().get(2).getAsJsonObject();
+                                                        var msgBuilder = WebMessageInfo.newBuilder();
+                                                        JsonFormat.parser().ignoringUnknownFields().merge(Util.GSON.toJson(msgObj), msgBuilder);
+                                                        var msg = msgBuilder.build();
+                                                        var messageCollectionItem = new MessageCollectionItem(this, JsonParser.parseString(JsonFormat.printer().print(msg)).getAsJsonObject());
+                                                        runOnSync(() -> {
+                                                            if (!getCollection(MessageCollection.class).hasItem(messageCollectionItem.getId()) && !getCollection(MessageCollection.class).tryAddItem(messageCollectionItem))
+                                                                logger.log(Level.SEVERE, "Fail on add received last message to collection: " + messageCollectionItem.getId());
+                                                            findChatFromId(messageCollectionItem.getRemoteJid()).thenAccept(chatCollectionItem -> {
+                                                                if (chatCollectionItem == null)
+                                                                    logger.log(Level.WARNING, "Received last message but chat was not found: " + messageCollectionItem.getRemoteJid());
+                                                                else
+                                                                    chatCollectionItem.setLastMessage(messageCollectionItem);
+                                                            });
+                                                        });
+                                                    }
+                                                    break;
+                                                }
+
+                                                default:
+                                                    logger.log(Level.WARNING, "Received unexpected action msg type: {" + addType + "} - with content: {" + current + "}");
+                                            }
+                                            break;
+                                        }
+                                        default:
+                                            logger.log(Level.WARNING, "Received unexpected action type: {" + key + "} - with content: {" + actionsGrouped.get(key) + "}");
+                                    }
+                                }
+                                break;
+                            }
+                            default:
+                                logger.log(Level.WARNING, "Received unexpected Binary type: {" + binaryType + "} - with content: {" + jsonDecoded + "}");
+                        }
+                    }
+
+                }
             }
         } catch (Exception e) {
             logger.log(Level.SEVERE, "OnMessage", e);
@@ -1558,113 +1626,122 @@ public class WhatsAppClient extends WebSocketClient {
     @Override
     public void onMessage(String message) {
         try {
-            if (message.charAt(0) == '!') {
-                var timestamp = Long.parseLong(message.substring(1));
-                lastSeen = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), TimeZone.getDefault().toZoneId());
+            if (mdVersion) {
+
             } else {
-                var msgSplit = message.split(",", 2);
-                var msgTag = msgSplit[0];
-                var msgContent = msgSplit[1];
-                if (msgContent == null || msgContent.isEmpty()) {
-                    return;
-                }
-                var jsonElement = JsonParser.parseString(msgContent);
+                if (message.charAt(0) == '!') {
+                    var timestamp = Long.parseLong(message.substring(1));
+                    lastSeen = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), TimeZone.getDefault().toZoneId());
+                } else {
+                    var msgSplit = message.split(",", 2);
+                    var msgTag = msgSplit[0];
+                    var msgContent = msgSplit[1];
+                    if (msgContent == null || msgContent.isEmpty()) {
+                        return;
+                    }
+                    var jsonElement = JsonParser.parseString(msgContent);
 
 
-                if (wsEvents.containsKey(msgTag)) {
-                    var response = wsEvents.get(msgTag);
-                    executorService.submit(runnableFactory.apply(() -> {
-                        response.complete(jsonElement);
-                    }));
-                } else if (jsonElement.isJsonArray()) {
-                    var jsonArray = jsonElement.getAsJsonArray();
-                    switch (jsonArray.get(0).getAsString()) {
-                        case "Cmd":
-                            var cmdObj = jsonArray.get(1).getAsJsonObject();
-                            switch (cmdObj.get("type").getAsString()) {
-                                case "challenge":
-                                    var challenge = cmdObj.get("challenge").getAsString();
-                                    respondToChallenge(challenge).thenAccept(aBoolean -> {
-                                        if (!aBoolean)
-                                            close(CloseFrame.REFUSE, "Error on resolve challenge");
-                                    });
-                                    break;
-                                default:
-                                    logger.log(Level.WARNING, "Received unexpected cmd tag: {" + cmdObj.get("type").getAsString() + "} with content: {" + cmdObj + "}");
-                            }
-                            break;
-                        case "Stream":
-                            break;
-                        case "Conn":
-                            if (refreshQrCodeScheduler != null) {
-                                refreshQrCodeScheduler.cancel(true);
-                                refreshQrCodeScheduler = null;
-                            }
-                            var connResponse = Util.GSON.fromJson(jsonArray.get(1).getAsJsonObject(), ConnResponse.class);
-                            authInfo.setBrowserToken(connResponse.getBrowserToken());
-                            authInfo.setClientToken(connResponse.getClientToken());
-                            authInfo.setServerToken(connResponse.getServerToken());
-                            if (connResponse.getSecret() != null) {
-                                authInfo.setSecret(connResponse.getSecret());
-                            }
-                            authInfo.setPushName(connResponse.getPushname());
-                            authInfo.setWid(connResponse.getWid());
-                            authInfo.setBusiness(connResponse.getPlatform().contains("smb"));
-                            communicationKeys = generateCommunicationKeys();
+                    if (wsEvents.containsKey(msgTag)) {
+                        var response = wsEvents.get(msgTag);
+                        executorService.submit(runnableFactory.apply(() -> {
+                            response.complete(jsonElement);
+                        }));
+                    } else if (jsonElement.isJsonArray()) {
+                        var jsonArray = jsonElement.getAsJsonArray();
+                        switch (jsonArray.get(0).getAsString()) {
+                            case "Cmd":
+                                var cmdObj = jsonArray.get(1).getAsJsonObject();
+                                switch (cmdObj.get("type").getAsString()) {
+                                    case "challenge":
+                                        var challenge = cmdObj.get("challenge").getAsString();
+                                        respondToChallenge(challenge).thenAccept(aBoolean -> {
+                                            if (!aBoolean)
+                                                close(CloseFrame.REFUSE, "Error on resolve challenge");
+                                        });
+                                        break;
+                                    case "upgrade_md_prod":
+                                        uri = URI.create(Constants.WS_URL_MD);
+                                        mdVersion = true;
+                                        close(CloseFrame.NORMAL, "Upgrade to MD Version");
+                                        break;
+                                    default:
+                                        logger.log(Level.WARNING, "Received unexpected cmd tag: {" + cmdObj.get("type").getAsString() + "} with content: {" + cmdObj + "}");
+                                }
+                                break;
+                            case "Stream":
+                                break;
+                            case "Conn":
+                                if (refreshQrCodeScheduler != null) {
+                                    refreshQrCodeScheduler.cancel(true);
+                                    refreshQrCodeScheduler = null;
+                                }
+                                var connResponse = Util.GSON.fromJson(jsonArray.get(1).getAsJsonObject(), ConnResponse.class);
+                                authInfo.setBrowserToken(connResponse.getBrowserToken());
+                                authInfo.setClientToken(connResponse.getClientToken());
+                                authInfo.setServerToken(connResponse.getServerToken());
+                                if (connResponse.getSecret() != null) {
+                                    authInfo.setSecret(connResponse.getSecret());
+                                }
+                                authInfo.setPushName(connResponse.getPushname());
+                                authInfo.setWid(connResponse.getWid());
+                                authInfo.setBusiness(connResponse.getPlatform().contains("smb"));
+                                communicationKeys = generateCommunicationKeys();
 
-                            connectTime = LocalDateTime.now();
+                                connectTime = LocalDateTime.now();
 
-                            executorService.submit(runnableFactory.apply(() -> {
-                                sendPresence(PresenceType.AVAILABLE);
-                                syncCollections().thenAccept(unused -> {
-                                    synchronized (syncIsSynced) {
-                                        for (Runnable runnable : runnableOnConnect) {
-                                            try {
-                                                runnable.run();
-                                            } catch (Exception e) {
-                                                logger.log(Level.SEVERE, "Failed to run", e);
-                                            }
-                                        }
-                                        runnableOnConnect.clear();
-                                        isSynced = true;
-                                    }
-                                    if (onConnect != null) {
-                                        onConnect.run();
-                                    }
-                                    setDriverState(DriverState.CONNECTED);
-                                });
-                            }));
-
-                            if (onAuthInfo != null) {
                                 executorService.submit(runnableFactory.apply(() -> {
-                                    onAuthInfo.accept(authInfo);
+                                    sendPresence(PresenceType.AVAILABLE);
+                                    syncCollections().thenAccept(unused -> {
+                                        synchronized (syncIsSynced) {
+                                            for (Runnable runnable : runnableOnConnect) {
+                                                try {
+                                                    runnable.run();
+                                                } catch (Exception e) {
+                                                    logger.log(Level.SEVERE, "Failed to run", e);
+                                                }
+                                            }
+                                            runnableOnConnect.clear();
+                                            isSynced = true;
+                                        }
+                                        if (onConnect != null) {
+                                            onConnect.run();
+                                        }
+                                        setDriverState(DriverState.CONNECTED);
+                                    });
                                 }));
-                            }
-                            break;
-                        case "Props":
-                            break;
-                        case "Msg":
-                            var content = jsonArray.get(1).getAsJsonObject();
-                            var cmd = content.get("cmd").getAsString();
-                            switch (cmd) {
-                                case "ack":
-                                    if (!getCollection(MessageCollection.class).changeItem(content.get("id").getAsString(), content))
-                                        logger.log(Level.SEVERE, "Fail on update received message: " + content.get("id").getAsString());
-                                    break;
-                                case "acks":
-                                    var ids = content.getAsJsonArray("id");
-                                    for (int i = 0; i < ids.size(); i++) {
-                                        var id = ids.get(i).getAsString();
-                                        if (!getCollection(MessageCollection.class).changeItem(id, content))
-                                            logger.log(Level.SEVERE, "Fail on update received message: " + id);
-                                    }
-                                    break;
-                                default:
-                                    logger.log(Level.WARNING, "Received unexpected msg cmd: {" + cmd + "} with content {" + content + "}");
-                            }
-                            break;
-                        default:
-                            logger.log(Level.WARNING, "Received unexpected tag: {" + jsonArray.get(0).getAsString() + "} with content: {" + jsonArray + "}");
+
+                                if (onAuthInfo != null) {
+                                    executorService.submit(runnableFactory.apply(() -> {
+                                        onAuthInfo.accept(authInfo);
+                                    }));
+                                }
+                                break;
+                            case "Props":
+                                break;
+                            case "Msg":
+                                var content = jsonArray.get(1).getAsJsonObject();
+                                var cmd = content.get("cmd").getAsString();
+                                switch (cmd) {
+                                    case "ack":
+                                        if (!getCollection(MessageCollection.class).changeItem(content.get("id").getAsString(), content))
+                                            logger.log(Level.SEVERE, "Fail on update received message: " + content.get("id").getAsString());
+                                        break;
+                                    case "acks":
+                                        var ids = content.getAsJsonArray("id");
+                                        for (int i = 0; i < ids.size(); i++) {
+                                            var id = ids.get(i).getAsString();
+                                            if (!getCollection(MessageCollection.class).changeItem(id, content))
+                                                logger.log(Level.SEVERE, "Fail on update received message: " + id);
+                                        }
+                                        break;
+                                    default:
+                                        logger.log(Level.WARNING, "Received unexpected msg cmd: {" + cmd + "} with content {" + content + "}");
+                                }
+                                break;
+                            default:
+                                logger.log(Level.WARNING, "Received unexpected tag: {" + jsonArray.get(0).getAsString() + "} with content: {" + jsonArray + "}");
+                        }
                     }
                 }
             }
@@ -1683,6 +1760,8 @@ public class WhatsAppClient extends WebSocketClient {
             }
             scheduledFutures.clear();
         }
+        if (autoReconnect)
+            executorService.submit(this::reconnect);
     }
 
     @Override
