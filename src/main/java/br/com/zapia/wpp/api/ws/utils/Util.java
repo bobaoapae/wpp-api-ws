@@ -22,6 +22,7 @@ import org.bytedeco.javacv.Java2DFrameConverter;
 import org.opencv.core.MatOfByte;
 import org.opencv.core.MatOfInt;
 import org.opencv.imgcodecs.Imgcodecs;
+import org.whispersystems.curve25519.Curve25519;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -57,6 +58,8 @@ public class Util {
     private static final Logger logger = Logger.getLogger(Util.class.getName());
     private static final byte[] HEX_ARRAY = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
 
+    public static final Curve25519 CURVE_25519 = Curve25519.getInstance(Curve25519.BEST);
+
     public static final Gson GSON = new GsonBuilder().create();
 
     public static byte[] getRandomBytes(int length) throws NoSuchAlgorithmException {
@@ -66,11 +69,15 @@ public class Util {
     }
 
     public static byte[] hkdfExpand(byte[] bytes, int length, byte[] info) {
-        var hkdf = HKDF.fromHmacSha256();
-
         var staticSalt32Byte = new byte[]{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
 
-        return hkdf.extractAndExpand(staticSalt32Byte, bytes, info, length);
+        return hkdfExpand(bytes, length, staticSalt32Byte, info);
+    }
+
+    public static byte[] hkdfExpand(byte[] bytes, int length, byte[] salt, byte[] info) {
+        var hkdf = HKDF.fromHmacSha256();
+
+        return hkdf.extractAndExpand(salt, bytes, info, length);
     }
 
     public static byte[] encryptWa(byte[] encKey, byte[] data) throws NoSuchAlgorithmException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidAlgorithmParameterException, InvalidKeyException {

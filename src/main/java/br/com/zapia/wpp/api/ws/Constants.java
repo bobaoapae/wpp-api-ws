@@ -13,6 +13,7 @@ public class Constants {
     public static final Integer[] WS_VERSION = new Integer[]{2, 2138, 13};
     public static final String[] WS_BROWSER_DESC = new String[]{"Zapia", "Edge", "1"};
     public static final byte[] NOISE_WA_HEADER = new byte[]{87, 65, 5, 2};
+    public static final String NOISE_MODE = "Noise_XX_25519_AESGCM_SHA256\0\0\0\0";
     public static final int KEEP_ALIVE_INTERVAL_MS = 20 * 1000;
     public static final int WA_DEFAULT_EPHEMERAL = 7 * 24 * 60 * 60;
     public static final Map<MessageType, String> HKDFInfoKeys = new HashMap<>() {{

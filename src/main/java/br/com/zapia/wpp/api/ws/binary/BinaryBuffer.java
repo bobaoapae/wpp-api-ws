@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
 /**
- * Copy from WhatsappWeb4j
+ * Copy from WhatsappWeb4j+
  */
 public class BinaryBuffer {
     protected ByteBuffer buffer;

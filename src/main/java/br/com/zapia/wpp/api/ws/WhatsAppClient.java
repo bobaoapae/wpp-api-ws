@@ -28,7 +28,6 @@ import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
-import org.whispersystems.curve25519.Curve25519;
 import org.whispersystems.curve25519.Curve25519KeyPair;
 
 import javax.crypto.BadPaddingException;
@@ -63,7 +62,6 @@ import java.util.logging.Logger;
 public class WhatsAppClient extends WebSocketClient {
 
     private static final Logger logger = Logger.getLogger(WhatsAppClient.class.getName());
-    private static final Curve25519 CURVE_25519 = Curve25519.getInstance(Curve25519.BEST);
 
     private final Function<Runnable, Runnable> runnableFactory;
     private final Function<Callable, Callable> callableFactory;
@@ -96,6 +94,7 @@ public class WhatsAppClient extends WebSocketClient {
     private final AtomicReference<CompletableFuture<byte[]>> awaiterNexMessage;
     private NoiseHandler noiseHandler;
     private Curve25519KeyPair ephemeralKeyPair;
+    private Curve25519KeyPair noiseKeyPair;
 
     private DriverState driverState;
     private int msgCount;
@@ -269,10 +268,21 @@ public class WhatsAppClient extends WebSocketClient {
     private void initLogin() {
         try {
             if (mdVersion) {
-                ephemeralKeyPair = CURVE_25519.generateKeyPair();
+                ephemeralKeyPair = Util.CURVE_25519.generateKeyPair();
+                noiseKeyPair = Util.CURVE_25519.generateKeyPair();
                 noiseHandler = new NoiseHandler(ephemeralKeyPair);
+                noiseHandler.init();
                 sendInitMD().thenAccept(handshakeMessage -> {
-                    //TODO: processHandshake
+                    byte[] keyEnc = null;
+                    try {
+                        keyEnc = noiseHandler.processHandshake(handshakeMessage, noiseKeyPair);
+                    } catch (Exception e) {
+                        logger.log(Level.SEVERE, "processHandshake", e);
+                        close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to exception on processHandshake");
+                        return;
+                    }
+
+
                     //TODO: send registrationNode or loginNode
                     //TODO: startKeepAlive
                 });
@@ -344,7 +354,7 @@ public class WhatsAppClient extends WebSocketClient {
     private void initNewSession() {
         try {
             setDriverState(DriverState.INIT_NEW_SESSION);
-            var keyPair = CURVE_25519.generateKeyPair();
+            var keyPair = Util.CURVE_25519.generateKeyPair();
             authInfo.setPrivateKey(Base64.getEncoder().encodeToString(keyPair.getPrivateKey()));
             authInfo.setPublicKey(Base64.getEncoder().encodeToString(keyPair.getPublicKey()));
             generateQrCode();
@@ -417,7 +427,7 @@ public class WhatsAppClient extends WebSocketClient {
                 throw new Exception("incorrect secret length received: " + decodedSecret.length);
             }
 
-            var sharedKey = CURVE_25519.calculateAgreement(Arrays.copyOf(decodedSecret, 32), Base64.getDecoder().decode(authInfo.getPrivateKey()));
+            var sharedKey = Util.CURVE_25519.calculateAgreement(Arrays.copyOf(decodedSecret, 32), Base64.getDecoder().decode(authInfo.getPrivateKey()));
 
             var expandedKey = Util.hkdfExpand(sharedKey, 80, null);
 
