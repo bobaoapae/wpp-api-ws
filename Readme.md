@@ -2,7 +2,7 @@
 
 ZapLib is a Java library for the WhatsApp Web.
 
-This project was based on [Baileys] and [Sigalor]
+This project was based on [Baileys], [Sigalor] and [WhatsappWeb4j]
 
 Functions Working:
 
@@ -34,7 +34,7 @@ Functions Working:
 
 # Multi Device
 
-- [x] Initial research on how it works based on these projects [Baileys] and [Whatsmeow]
+- [x] Initial research on how it works based on these projects [Baileys], [Whatsmeow] and [WhatsappWeb4j]
 - [x] NoiseHandler
 - [x] Handshake
 - [x] Receive Pair-Device
@@ -44,6 +44,8 @@ Functions Working:
 [Sigalor]: https://github.com/sigalor/whatsapp-web-reveng
 
 [Whatsmeow]: https://github.com/tulir/whatsmeow
+
+[WhatsappWeb4j]: https://github.com/Auties00/WhatsappWeb4j
 
 ## Usage
 
