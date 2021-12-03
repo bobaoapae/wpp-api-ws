@@ -22,6 +22,7 @@ public class WhatsAppClientBuilder {
     private Consumer<DriverState> onChangeDriverState;
     private Runnable onConnect;
     private AuthInfo authInfo;
+    private boolean isForceMd;
 
     public WhatsAppClientBuilder() {
         this.runnableFactory = runnable -> () -> runnable.run();
@@ -81,7 +82,12 @@ public class WhatsAppClientBuilder {
         return this;
     }
 
+    public WhatsAppClientBuilder withForceMd(boolean isForceMd) {
+        this.isForceMd = isForceMd;
+        return this;
+    }
+
     public WhatsAppClient builder() {
-        return new WhatsAppClient(authInfo, onQrCode, onConnect, onAuthInfo, onChangeDriverState, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
+        return new WhatsAppClient(authInfo, onQrCode, isForceMd, onConnect, onAuthInfo, onChangeDriverState, runnableFactory, callableFactory, threadFactory, executorService, scheduledExecutorService);
     }
 }

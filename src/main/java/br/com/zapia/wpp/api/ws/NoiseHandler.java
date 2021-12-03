@@ -123,7 +123,7 @@ public class NoiseHandler {
             if ((bytes.readUInt8() & 2) != 0) {
                 bytes = BinaryBuffer.fromBytes(Util.inflateBytes(bytes.remaining().readAllBytes()));
             }
-            return new NodeWhatsAppFrame(new WABinaryDecoder(bytes.remaining().readAllBytes()).read());
+            return new NodeWhatsAppFrame(new WABinaryDecoder(bytes.remaining().readAllBytes(), true).read());
         } else {
             return new BinaryWhatsAppFrame(message.getDecoded().data());
         }

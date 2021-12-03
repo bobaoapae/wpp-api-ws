@@ -12,9 +12,11 @@ import java.util.Arrays;
 public class WABinaryEncoder {
 
     private final ByteArrayOutputStream buffer;
+    private final boolean isMd;
 
-    public WABinaryEncoder() {
+    public WABinaryEncoder(boolean isMd) {
         buffer = new ByteArrayOutputStream();
+        this.isMd = isMd;
     }
 
     private void pushByte(short value) {
@@ -89,7 +91,10 @@ public class WABinaryEncoder {
         }
         if (token.equals("c.us")) token = "s.whatsapp.net";
 
-        var tokenIndex = Arrays.stream(BinaryConstants.WA.SingleByteTokens).toList().indexOf(token);
+        var tokenIndex = Arrays.stream(isMd ? BinaryConstants.WA.SingleByteTokensMD : BinaryConstants.WA.SingleByteTokens).toList().indexOf(token);
+        if (isMd) {
+            tokenIndex++;
+        }
         if (!i && token.equals("s.whatsapp.net")) {
             writeToken((short) tokenIndex);
         } else if (tokenIndex >= 0) {

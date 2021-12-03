@@ -17,10 +17,12 @@ import java.util.Map;
 public class WABinaryDecoder {
 
     private final byte[] data;
+    private final boolean isMd;
     private int index;
 
-    public WABinaryDecoder(byte[] data) {
+    public WABinaryDecoder(byte[] data, boolean isMd) {
         this.data = data;
+        this.isMd = isMd;
         index = 0;
     }
 
@@ -188,17 +190,19 @@ public class WABinaryDecoder {
     }
 
     private String getToken(int index) {
-        if (index < 3 || index > BinaryConstants.WA.SingleByteTokens.length) {
+        if (isMd)
+            index--;
+        if ((!isMd && index < 3) || index > (isMd ? BinaryConstants.WA.SingleByteTokensMD.length : BinaryConstants.WA.SingleByteTokens.length)) {
             throw new IllegalArgumentException("Invalid token index: " + index);
         }
 
-        return BinaryConstants.WA.SingleByteTokens[index];
+        return isMd ? BinaryConstants.WA.SingleByteTokensMD[index] : BinaryConstants.WA.SingleByteTokens[index];
     }
 
     private String getTokenDouble(int index, int index2) {
         var n = 256 * index + index2;
 
-        if (n < 3 || n > BinaryConstants.WA.SingleByteTokens.length) {
+        if (n < 3 || n > BinaryConstants.WA.DoubleByteTokens.length) {
             throw new IllegalArgumentException("Invalid token index: " + index);
         }
 

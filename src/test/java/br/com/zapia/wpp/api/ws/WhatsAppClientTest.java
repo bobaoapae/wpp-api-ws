@@ -42,19 +42,20 @@ class WhatsAppClientTest {
         onAuthInfo = new CompletableFuture<>();
         onConnect = new CompletableFuture<>();
         whatsAppClient = new WhatsAppClientBuilder().withOnQrCode(s -> {
-            System.out.println(s);
-        }).withOnConnect(() -> {
-            onConnect.complete(null);
-        }).withOnAuthInfo(authInfo1 -> {
-            try {
-                saveAuthInfo(authInfo1);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            onAuthInfo.complete(authInfo1);
-        }).withOnChangeDriverState(driverState -> {
-            System.out.println(driverState);
-        }).withAuthInfo(authInfo).builder();
+                    System.out.println(s);
+                }).withOnConnect(() -> {
+                    onConnect.complete(null);
+                }).withOnAuthInfo(authInfo1 -> {
+                    try {
+                        saveAuthInfo(authInfo1);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    onAuthInfo.complete(authInfo1);
+                }).withOnChangeDriverState(driverState -> {
+                    System.out.println(driverState);
+                }).withAuthInfo(authInfo)
+                .withForceMd(true).builder();
         whatsAppClient.connect();
     }
 
