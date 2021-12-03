@@ -1,10 +1,15 @@
 package br.com.zapia.wpp.api.ws;
 
+import br.com.zapia.wpp.api.ws.binary.BinaryArray;
 import br.com.zapia.wpp.api.ws.binary.BinaryBuffer;
-import br.com.zapia.wpp.api.ws.binary.WhatsAppBinaryBuffer;
+import br.com.zapia.wpp.api.ws.binary.BinaryMessage;
+import br.com.zapia.wpp.api.ws.binary.WABinaryDecoder;
 import br.com.zapia.wpp.api.ws.binary.protos.Details;
 import br.com.zapia.wpp.api.ws.binary.protos.HandshakeMessage;
 import br.com.zapia.wpp.api.ws.binary.protos.NoiseCertificate;
+import br.com.zapia.wpp.api.ws.model.communication.BinaryWhatsAppFrame;
+import br.com.zapia.wpp.api.ws.model.communication.IWhatsAppFrame;
+import br.com.zapia.wpp.api.ws.model.communication.NodeWhatsAppFrame;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.common.hash.Hashing;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -16,17 +21,16 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
-import java.util.function.Consumer;
 
 public class NoiseHandler {
 
     private final Curve25519KeyPair keyPair;
-    private final WhatsAppBinaryBuffer inBinary;
     private byte[] hash;
     private byte[] decKey;
     private byte[] encKey;
@@ -38,12 +42,10 @@ public class NoiseHandler {
 
     public NoiseHandler(Curve25519KeyPair keyPair) {
         this.keyPair = keyPair;
-        inBinary = new WhatsAppBinaryBuffer();
     }
 
-    public synchronized void init() {
-        var data = new BinaryBuffer().writeString(Constants.NOISE_MODE).readWrittenBytes();
-        hash = data.length == 32 ? data : Hashing.sha256().newHasher().putBytes(data).hash().asBytes();
+    public void init() {
+        hash = BinaryArray.of(Constants.NOISE_MODE).data();
         decKey = hash;
         encKey = hash;
         salt = hash;
@@ -91,7 +93,7 @@ public class NoiseHandler {
         return keyEnc;
     }
 
-    public synchronized byte[] encodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
+    public byte[] encodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
         if (isFinished)
             data = encrypt(data);
 
@@ -109,19 +111,36 @@ public class NoiseHandler {
                 .readWrittenBytes();
     }
 
-    public synchronized void decodeFrame(byte[] data, Consumer<byte[]> onFrame) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
-        inBinary.writeBytes(data);
+    public IWhatsAppFrame decodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, IOException {
+        var message = new BinaryMessage(data);
+
+        if (message.getLength() == 8913411) {
+            throw new IllegalStateException("Invalid message received");
+        }
+
+        if (isFinished) {
+            var bytes = BinaryBuffer.fromBytes(decrypt(message.getDecoded().data()));
+            if ((bytes.readUInt8() & 2) != 0) {
+                bytes = BinaryBuffer.fromBytes(Util.inflateBytes(bytes.remaining().readAllBytes()));
+            }
+            return new NodeWhatsAppFrame(new WABinaryDecoder(bytes.remaining().readAllBytes()).read());
+        } else {
+            return new BinaryWhatsAppFrame(message.getDecoded().data());
+        }
+        /*inBinary.writeBytes(data);
         while (inBinary.canPeek()) {
             inBinary.resetPosition();
             var bytesLength = getBytesSize();
             var bytes = inBinary.readBytes(bytesLength);
+            inBinary.markPosition();
             if (isFinished) {
-                //TODO: unpack
                 bytes = decrypt(bytes);
+                bytes = Util.inflateBytes(bytes);
+                onFrame.accept(new NodeWhatsAppFrame(new WABinaryDecoder(bytes).read()));
+            } else {
+                onFrame.accept(new BinaryWhatsAppFrame(bytes));
             }
-
-            onFrame.accept(bytes);
-        }
+        }*/
     }
 
     public void authenticate(byte[] data) {
@@ -130,52 +149,50 @@ public class NoiseHandler {
         }
     }
 
-    public synchronized byte[] encrypt(byte[] data) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
-        var tagLength = 128 >> 3;
-
+    public byte[] encrypt(byte[] data) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
         var cipher = Cipher.getInstance("AES/GCM/NoPadding");
 
         var keySpec = new SecretKeySpec(encKey, "AES");
 
-        var gcmParameterSpec = new GCMParameterSpec(tagLength * Byte.SIZE, generateIV(writeCounter));
+        var gcmParameterSpec = new GCMParameterSpec(128, generateIV(writeCounter++));
 
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmParameterSpec);
         cipher.updateAAD(hash);
 
-        authenticate(data);
-        writeCounter++;
+        var result = cipher.doFinal(data);
+        authenticate(result);
 
-        return cipher.doFinal(data);
+        return result;
     }
 
-    public synchronized byte[] decrypt(byte[] data) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
-        var tagLength = 128 >> 3;
-
+    public byte[] decrypt(byte[] data) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException {
         var cipher = Cipher.getInstance("AES/GCM/NoPadding");
 
         var keySpec = new SecretKeySpec(decKey, "AES");
 
-        var gcmParameterSpec = new GCMParameterSpec(tagLength * Byte.SIZE, generateIV(isFinished ? readCounter : writeCounter));
+        var gcmParameterSpec = new GCMParameterSpec(128, generateIV(isFinished ? readCounter++ : writeCounter++));
 
         cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmParameterSpec);
         cipher.updateAAD(hash);
 
         authenticate(data);
-        if (isFinished)
-            readCounter += 1;
-        else
-            writeCounter += 1;
 
         return cipher.doFinal(data);
     }
 
-    private int getBytesSize() {
-        return (inBinary.readUInt8() << 16) | inBinary.readUInt16();
-    }
-
-    public synchronized byte[] generateIV(int writeCounter) {
+    public byte[] generateIV(int writeCounter) {
         return ByteBuffer.allocate(12)
                 .putLong(4, writeCounter)
                 .array();
+    }
+
+    public void finishInit() {
+        var result = localHKDF(new byte[0]);
+        encKey = result[0];
+        decKey = result[1];
+        hash = new byte[0];
+        readCounter = 0;
+        writeCounter = 0;
+        isFinished = true;
     }
 }

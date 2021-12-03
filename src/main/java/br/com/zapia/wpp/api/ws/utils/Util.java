@@ -1,12 +1,8 @@
 package br.com.zapia.wpp.api.ws.utils;
 
-import at.favre.lib.crypto.HKDF;
 import br.com.zapia.wpp.api.ws.Constants;
 import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
-import br.com.zapia.wpp.api.ws.model.EncryptedStream;
-import br.com.zapia.wpp.api.ws.model.MediaKey;
-import br.com.zapia.wpp.api.ws.model.MessageCollectionItem;
-import br.com.zapia.wpp.api.ws.model.MessageType;
+import br.com.zapia.wpp.api.ws.model.*;
 import com.google.common.hash.Hashing;
 import com.google.common.primitives.Bytes;
 import com.google.gson.Gson;
@@ -23,6 +19,7 @@ import org.opencv.core.MatOfByte;
 import org.opencv.core.MatOfInt;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.whispersystems.curve25519.Curve25519;
+import org.whispersystems.curve25519.Curve25519KeyPair;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -52,6 +49,7 @@ import java.util.Base64;
 import java.util.Iterator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.zip.InflaterOutputStream;
 
 public class Util {
 
@@ -61,6 +59,17 @@ public class Util {
     public static final Curve25519 CURVE_25519 = Curve25519.getInstance(Curve25519.BEST);
 
     public static final Gson GSON = new GsonBuilder().create();
+
+    public static SignedKeyPair signedKeyPair(Curve25519KeyPair keyPair, int keyId) {
+        var signKeys = CURVE_25519.generateKeyPair();
+        var pubKey = new byte[33];
+        pubKey[0] = 5;
+        System.arraycopy(keyPair.getPublicKey(), 0, pubKey, 1, keyPair.getPublicKey().length);
+
+        var signature = CURVE_25519.calculateSignature(keyPair.getPrivateKey(), pubKey);
+
+        return new SignedKeyPair(signKeys, signature, keyId);
+    }
 
     public static byte[] getRandomBytes(int length) throws NoSuchAlgorithmException {
         byte[] bytes = new byte[length];
@@ -342,5 +351,12 @@ public class Util {
 
     public static boolean isNewMessage(LocalDateTime connectTime, MessageCollectionItem messageCollectionItem) {
         return connectTime.isBefore(messageCollectionItem.getTimeStamp());
+    }
+
+    public static byte[] inflateBytes(byte[] data) throws IOException {
+        var out = new ByteArrayOutputStream();
+        var inflater = new InflaterOutputStream(out);
+        inflater.write(data, 0, data.length);
+        return out.toByteArray();
     }
 }

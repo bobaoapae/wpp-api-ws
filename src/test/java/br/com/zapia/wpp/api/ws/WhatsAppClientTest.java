@@ -2,7 +2,6 @@ package br.com.zapia.wpp.api.ws;
 
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.utils.Util;
-import com.google.gson.JsonParser;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import org.junit.jupiter.api.*;
@@ -31,15 +30,6 @@ class WhatsAppClientTest {
     private CompletableFuture<MessageCollectionItem> eventUpdateMsg;
     private MessageCollectionItem msgReceived;
     private MessageCollectionItem lastMsgSend;
-
-    @Order(0)
-    @Test
-    public void testJson() {
-        var bytes = new byte[100];
-        var json = JsonParser.parseString(Util.GSON.toJson(bytes));
-        var byteArray = Util.GSON.fromJson(json, byte[].class);
-        System.out.println("a");
-    }
 
     @Order(1)
     @Test

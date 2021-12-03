@@ -1,5 +1,6 @@
 package br.com.zapia.wpp.api.ws;
 
+import br.com.zapia.wpp.api.ws.binary.BinaryArray;
 import br.com.zapia.wpp.api.ws.binary.BinaryConstants;
 import br.com.zapia.wpp.api.ws.binary.WABinaryDecoder;
 import br.com.zapia.wpp.api.ws.binary.WABinaryEncoder;
@@ -30,10 +31,7 @@ import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.whispersystems.curve25519.Curve25519KeyPair;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
+import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
@@ -91,10 +89,10 @@ public class WhatsAppClient extends WebSocketClient {
     private CommunicationKeys communicationKeys;
     private String lastQrCode;
 
-    private final AtomicReference<CompletableFuture<byte[]>> awaiterNexMessage;
+    private final AtomicReference<CompletableFuture<IWhatsAppFrame>> awaiterNexMessage;
+    private MDCreds mdCreds;
     private NoiseHandler noiseHandler;
     private Curve25519KeyPair ephemeralKeyPair;
-    private Curve25519KeyPair noiseKeyPair;
 
     private DriverState driverState;
     private int msgCount;
@@ -134,6 +132,8 @@ public class WhatsAppClient extends WebSocketClient {
         setDriverState(DriverState.UNLOADED);
         setConnectionLostTimeout(0);
         getHeadersConnectWs().forEach(this::addHeader);
+        uri = URI.create(Constants.WS_URL_MD);
+        mdVersion = true;
     }
 
     protected Map<String, String> getHeadersConnectWs() {
@@ -175,8 +175,8 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
-    public CompletableFuture<byte[]> sendAndAwaitNextMessage(byte[] data) {
-        var response = new CompletableFuture<byte[]>();
+    public CompletableFuture<IWhatsAppFrame> sendAndAwaitNextMessage(byte[] data) {
+        var response = new CompletableFuture<IWhatsAppFrame>();
         awaiterNexMessage.set(response);
         try {
             sendRawMessage(data);
@@ -187,9 +187,10 @@ public class WhatsAppClient extends WebSocketClient {
         return response;
     }
 
-    public void sendRawMessage(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
+    public void sendRawMessage(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, ShortBufferException {
         var bytes = noiseHandler.encodeFrame(data);
         send(bytes);
+        logger.log(Level.INFO, "sendRawMessage");
     }
 
 
@@ -268,19 +269,53 @@ public class WhatsAppClient extends WebSocketClient {
     private void initLogin() {
         try {
             if (mdVersion) {
+                if (mdCreds == null) {
+                    var identityKey = Util.CURVE_25519.generateKeyPair();
+                    var noiseKeyPair = Util.CURVE_25519.generateKeyPair();
+                    var signedPreKey = Util.signedKeyPair(identityKey, 1);
+                    var registrationId = Util.getRandomBytes(2)[0] & 0x3fff;
+                    var advSecretKey = Base64.getEncoder().encodeToString(Util.getRandomBytes(32));
+                    var nextPreKeyId = 1;
+                    var firstUnuploadedPreKeyId = 1;
+                    var serverhasPreKeys = false;
+                    mdCreds = new MDCreds(noiseKeyPair, identityKey, signedPreKey, registrationId, advSecretKey, nextPreKeyId, firstUnuploadedPreKeyId, serverhasPreKeys);
+                }
                 ephemeralKeyPair = Util.CURVE_25519.generateKeyPair();
-                noiseKeyPair = Util.CURVE_25519.generateKeyPair();
                 noiseHandler = new NoiseHandler(ephemeralKeyPair);
                 noiseHandler.init();
                 sendInitMD().thenAccept(handshakeMessage -> {
-                    byte[] keyEnc = null;
+                    byte[] keyEnc;
                     try {
-                        keyEnc = noiseHandler.processHandshake(handshakeMessage, noiseKeyPair);
+                        keyEnc = noiseHandler.processHandshake(handshakeMessage, mdCreds.getNoiseKey());
                     } catch (Exception e) {
                         logger.log(Level.SEVERE, "processHandshake", e);
                         close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to exception on processHandshake");
                         return;
                     }
+
+                    var node = mdCreds.getMeInfo() == null ? generateRegistrationNode() : generateLoginNode();
+
+                    byte[] payloadEnc;
+
+                    try {
+                        payloadEnc = noiseHandler.encrypt(node);
+                    } catch (Exception e) {
+                        logger.log(Level.SEVERE, "encrypt node", e);
+                        close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to exception on encrypt node");
+                        return;
+                    }
+
+                    var handShakeResponse = HandshakeMessage.newBuilder().setClientFinish(ClientFinish.newBuilder().setStatic(ByteString.copyFrom(keyEnc)).setPayload(ByteString.copyFrom(payloadEnc)));
+
+                    try {
+                        sendRawMessage(handShakeResponse.build().toByteArray());
+                    } catch (Exception e) {
+                        logger.log(Level.SEVERE, "sendRawMessage", e);
+                        close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to exception on sendRawMessage");
+                        return;
+                    }
+
+                    noiseHandler.finishInit();
 
 
                     //TODO: send registrationNode or loginNode
@@ -332,6 +367,53 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
+    private byte[] generateRegistrationNode() {
+
+        var appVersionBuf = Base64.getDecoder().decode(Constants.ENCODED_VERSION);
+
+        var companion = CompanionProps.newBuilder()
+                .setOs(Constants.WS_BROWSER_DESC[0])
+                .setVersion(AppVersion.newBuilder().setPrimary(10)).setPlatformType(CompanionProps.CompanionPropsPlatformType.CHROME)
+                .setRequireFullSync(false);
+
+        var companionRegData = CompanionRegData.newBuilder()
+                .setBuildHash(ByteString.copyFrom(appVersionBuf))
+                .setCompanionProps(companion.build().toByteString())
+                .setERegid(ByteString.copyFrom(BinaryArray.of(mdCreds.getRegistrationId(), 4).data()))
+                .setEKeytype(ByteString.copyFrom(BinaryArray.of(5, 1).data()))
+                .setEIdent(ByteString.copyFrom(mdCreds.getSignedIdentityKey().getPublicKey()))
+                .setESkeyId(ByteString.copyFrom(BinaryArray.of(mdCreds.getSignedPreKey().getKeyId(), 3).data()))
+                .setESkeyVal(ByteString.copyFrom(mdCreds.getSignedPreKey().getKeyPair().getPublicKey()))
+                .setESkeySig(ByteString.copyFrom(mdCreds.getSignedPreKey().getSignature()));
+
+        var userAgent = UserAgent.newBuilder()
+                .setAppVersion(AppVersion.newBuilder().setPrimary(Constants.WS_VERSION[0]).setSecondary(Constants.WS_VERSION[1]).setTertiary(Constants.WS_VERSION[2]))
+                .setPlatform(UserAgent.UserAgentPlatform.WEB)
+                .setReleaseChannel(UserAgent.UserAgentReleaseChannel.RELEASE)
+                .setMcc("000")
+                .setMnc("000")
+                .setDevice(Constants.WS_BROWSER_DESC[1])
+                .setOsVersion(Constants.WS_BROWSER_DESC[2])
+                .setManufacturer("")
+                .setOsBuildNumber("0.1")
+                .setLocaleLanguageIso6391("en")
+                .setLocaleCountryIso31661Alpha2("en");
+
+        var clientPayLoad = ClientPayload.newBuilder();
+        clientPayLoad.setConnectReason(ClientPayload.ClientPayloadConnectReason.USER_ACTIVATED)
+                .setConnectType(ClientPayload.ClientPayloadConnectType.WIFI_UNKNOWN)
+                .setPassive(false)
+                .setRegData(companionRegData)
+                .setUserAgent(userAgent)
+                .setWebInfo(WebInfo.newBuilder().setWebSubPlatform(WebInfo.WebInfoWebSubPlatform.WEB_BROWSER));
+
+        return clientPayLoad.build().toByteArray();
+    }
+
+    private byte[] generateLoginNode() {
+        return null;
+    }
+
     private CompletableFuture<InitResponse> sendInit() {
         setDriverState(DriverState.INITIALIZING);
         return sendJson(new InitRequest(authInfo.getClientId()).toJson(), InitResponse.class);
@@ -341,9 +423,9 @@ public class WhatsAppClient extends WebSocketClient {
         setDriverState(DriverState.INITIALIZING);
 
         var init = HandshakeMessage.newBuilder().setClientHello(ClientHello.newBuilder().setEphemeral(ByteString.copyFrom(ephemeralKeyPair.getPublicKey()))).build();
-        return sendAndAwaitNextMessage(init.toByteArray()).thenApply(bytes -> {
+        return sendAndAwaitNextMessage(init.toByteArray()).thenApply(whatsAppFrame -> {
             try {
-                return HandshakeMessage.parseFrom(bytes);
+                return HandshakeMessage.parseFrom(((BinaryWhatsAppFrame) whatsAppFrame).getData());
             } catch (Exception e) {
                 logger.log(Level.SEVERE, "sendInitMD", e);
                 throw new CompletionException(e);
@@ -1471,19 +1553,19 @@ public class WhatsAppClient extends WebSocketClient {
     public void onOpen(ServerHandshake handshakedata) {
         wsEvents.clear();
         collections.clear();
-        initLogin();
+        executorService.submit(runnableFactory.apply(this::initLogin));
     }
 
     @Override
     public void onMessage(ByteBuffer bytes) {
         try {
             if (mdVersion) {
-                noiseHandler.decodeFrame(bytes.array(), bytes1 -> {
-                    var awaiter = awaiterNexMessage.getAndSet(null);
-                    if (awaiter != null) {
-                        awaiter.complete(bytes1);
-                    }
-                });
+                var result = noiseHandler.decodeFrame(bytes.array());
+                var awaiter = awaiterNexMessage.getAndSet(null);
+                if (awaiter != null) {
+                    awaiter.completeAsync(() -> result, executorService);
+                }
+                logger.log(Level.INFO, "Received Frame: " + result);
             } else {
                 var byteArray = bytes.array();
                 int commaIndex = -1;
@@ -1762,7 +1844,7 @@ public class WhatsAppClient extends WebSocketClient {
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
-        logger.log(Level.SEVERE, "Ws Disconnected with code: {" + code + "} and reason: {" + reason + "}");
+        logger.log(Level.SEVERE, "Ws Disconnected with code: {" + code + "} and reason: {" + reason + "}. fromRemote: {" + remote + "}");
         synchronized (scheduledFutures) {
             for (var scheduledFuture : scheduledFutures) {
                 if (!scheduledFuture.isCancelled())

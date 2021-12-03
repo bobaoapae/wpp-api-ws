@@ -141,6 +141,10 @@ public class WABinaryDecoder {
             return getTokenDouble(tag - BinaryConstants.WA.Tags.DICTIONARY_0.getNumVal(), readByte());
         } else if (tag == BinaryConstants.WA.Tags.LIST_EMPTY.getNumVal()) {
             return null;
+        } else if (tag == BinaryConstants.WA.Tags.LIST_8.getNumVal()) {
+            return readStringFromChars(readByte());
+        } else if (tag == BinaryConstants.WA.Tags.LIST_16.getNumVal()) {
+            return readStringFromChars(readByte());
         } else if (tag == BinaryConstants.WA.Tags.BINARY_8.getNumVal()) {
             return readStringFromChars(readByte());
         } else if (tag == BinaryConstants.WA.Tags.BINARY_20.getNumVal()) {

@@ -1,7 +1,10 @@
 package br.com.zapia.wpp.api.ws;
 
 import br.com.zapia.wpp.api.ws.model.MessageType;
+import com.google.common.hash.Hashing;
 
+import java.nio.charset.Charset;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -10,8 +13,9 @@ public class Constants {
     public static final String WS_URL = "wss://web.whatsapp.com/ws";
     public static final String WS_URL_MD = "wss://web.whatsapp.com/ws/chat";
     public static final String ORIGIN_WS = "https://web.whatsapp.com";
-    public static final Integer[] WS_VERSION = new Integer[]{2, 2138, 13};
-    public static final String[] WS_BROWSER_DESC = new String[]{"Zapia", "Edge", "1"};
+    public static final Integer[] WS_VERSION = new Integer[]{2, 2146, 9};
+    public static final String ENCODED_VERSION = Base64.getEncoder().encodeToString(Hashing.md5().newHasher().putString(WS_VERSION[0] + "." + WS_VERSION[1] + "." + WS_VERSION[2], Charset.defaultCharset()).hash().asBytes());
+    public static final String[] WS_BROWSER_DESC = new String[]{"Zapia", "Chrome", "4.0.0"};
     public static final byte[] NOISE_WA_HEADER = new byte[]{87, 65, 5, 2};
     public static final String NOISE_MODE = "Noise_XX_25519_AESGCM_SHA256\0\0\0\0";
     public static final int KEEP_ALIVE_INTERVAL_MS = 20 * 1000;
