@@ -125,18 +125,5 @@
             </plugin>
         </plugins>
     </build>
-    <distributionManagement>
-        <repository>
-            <id>zapia.com.br</id>
-            <name>zapia.com.br</name>
-            <url>http://zapia.com.br:8090/repository/maven-releases/</url>
-        </repository>
-        <snapshotRepository>
-            <id>zapia.com.br</id>
-            <name>zapia.com.br</name>
-            <url>http://zapia.com.br:8090/repository/maven-snapshots/</url>
-            <uniqueVersion>false</uniqueVersion>
-        </snapshotRepository>
-    </distributionManagement>
 
 </project>
