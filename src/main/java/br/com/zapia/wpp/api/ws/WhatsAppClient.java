@@ -132,8 +132,6 @@ public class WhatsAppClient extends WebSocketClient {
         setDriverState(DriverState.UNLOADED);
         setConnectionLostTimeout(0);
         getHeadersConnectWs().forEach(this::addHeader);
-        uri = URI.create(Constants.WS_URL_MD);
-        mdVersion = true;
     }
 
     protected Map<String, String> getHeadersConnectWs() {
