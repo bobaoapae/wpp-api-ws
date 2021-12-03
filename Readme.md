@@ -35,6 +35,9 @@ Functions Working:
 # Multi Device
 
 - [x] Initial research on how it works based on these projects [Baileys] and [Whatsmeow]
+- [x] NoiseHandler
+- [x] Handshake
+- [x] Receive Pair-Device
 
 [Baileys]: https://github.com/adiwajshing/Baileys
 
