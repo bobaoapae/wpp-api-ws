@@ -48,6 +48,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -282,6 +283,18 @@ public class WhatsAppClient extends WebSocketClient {
                     .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()))
                     .put(new JsonArray());
             sendNode(response);
+
+            var refs = nodeWhatsAppFrame.getData().get(0).getAsJsonArray().get(2).getAsJsonArray();
+            var count = new AtomicInteger(0);
+            refreshQrCodeScheduler = schedule(() -> {
+                var nextCount = count.getAndIncrement();
+                if (nextCount > refs.size()) {
+                    close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to many QR refresh");
+                } else {
+                    var ref = refs.get(nextCount).getAsJsonArray().get(2).getAsString();
+                    generateMDQrCode(ref);
+                }
+            }, 0, 60000, TimeUnit.MILLISECONDS);
         });
     }
 
@@ -337,8 +350,6 @@ public class WhatsAppClient extends WebSocketClient {
 
                     noiseHandler.finishInit();
 
-
-                    //TODO: send registrationNode or loginNode
                     //TODO: startKeepAlive
                 });
             } else {
@@ -417,12 +428,12 @@ public class WhatsAppClient extends WebSocketClient {
                 .setManufacturer("")
                 .setOsBuildNumber("0.1")
                 .setLocaleLanguageIso6391("en")
-                .setLocaleCountryIso31661Alpha2("en");
+                .setLocaleCountryIso31661Alpha2("US");
 
         var clientPayLoad = ClientPayload.newBuilder();
         clientPayLoad.setConnectReason(ClientPayload.ClientPayloadConnectReason.USER_ACTIVATED)
                 .setConnectType(ClientPayload.ClientPayloadConnectType.WIFI_UNKNOWN)
-                .setPassive(false)
+                .setPassive(true)
                 .setRegData(companionRegData)
                 .setUserAgent(userAgent)
                 .setWebInfo(WebInfo.newBuilder().setWebSubPlatform(WebInfo.WebInfoWebSubPlatform.WEB_BROWSER));
@@ -497,6 +508,25 @@ public class WhatsAppClient extends WebSocketClient {
             logger.log(Level.SEVERE, "Failed to resolve challenge {status: " + jsonObject.get("status") + "}, starting a new one");
             return false;
         });
+    }
+
+    private void generateMDQrCode(String ref) {
+        try {
+            var stringQrCode = ref + "," + Base64.getEncoder().encodeToString(mdCreds.getNoiseKey().getPublicKey()) + "," + Base64.getEncoder().encodeToString(mdCreds.getSignedIdentityKey().getPublicKey()) + "," + mdCreds.getAdvSecretKey();
+            var barcodeWriter = new QRCodeWriter();
+            var bitMatrix = barcodeWriter.encode(stringQrCode, BarcodeFormat.QR_CODE, 400, 400);
+            var outputStream = new ByteArrayOutputStream();
+            MatrixToImageWriter.writeToStream(bitMatrix, "png", outputStream);
+            lastQrCode = "data:image/png;base64," + Base64.getEncoder().encodeToString(outputStream.toByteArray());
+            if (onQrCode != null) {
+                executorService.submit(runnableFactory.apply(() -> {
+                    onQrCode.accept(lastQrCode);
+                }));
+            }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "GenerateQrCode", e);
+            close(CloseFrame.ABNORMAL_CLOSE, "Ws Closed due to error on generate QrCode");
+        }
     }
 
     private void generateQrCode() {
@@ -1819,7 +1849,7 @@ public class WhatsAppClient extends WebSocketClient {
     public void onMessage(String message) {
         try {
             if (mdVersion) {
-
+                System.out.println(message);
             } else {
                 if (message.charAt(0) == '!') {
                     var timestamp = Long.parseLong(message.substring(1));
