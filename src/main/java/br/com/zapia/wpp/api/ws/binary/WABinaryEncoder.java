@@ -89,15 +89,26 @@ public class WABinaryEncoder {
         if (token == null) {
             token = "";
         }
-        if (token.equals("c.us")) token = "s.whatsapp.net";
+
+
+        if (!i && token.equals("c.us")) {
+            writeToken((short) Arrays.stream(BinaryConstants.WA.SingleByteTokensMD).toList().indexOf("s.whatsapp.net"));
+            return;
+        }
 
         var tokenIndex = Arrays.stream(isMd ? BinaryConstants.WA.SingleByteTokensMD : BinaryConstants.WA.SingleByteTokens).toList().indexOf(token);
-        if (isMd) {
-            tokenIndex++;
-        }
-        if (!i && token.equals("s.whatsapp.net")) {
-            writeToken((short) tokenIndex);
-        } else if (tokenIndex >= 0) {
+
+
+        if (tokenIndex == -1) {
+            var jidSepIndex = token.indexOf('@');
+            if (jidSepIndex < 0) {
+                this.writeStringRaw(token);
+            } else {
+                this.writeJid(token.substring(0, jidSepIndex), token.substring(jidSepIndex + 1));
+            }
+        } else {
+            if (isMd)
+                tokenIndex++;
             if (tokenIndex < BinaryConstants.WA.Tags.SINGLE_BYTE_MAX.getNumVal()) {
                 writeToken((short) tokenIndex);
             } else {
@@ -108,13 +119,6 @@ public class WABinaryEncoder {
                 }
                 writeToken((short) (BinaryConstants.WA.Tags.DICTIONARY_0.getNumVal() + dictionaryIndex));
                 writeToken((short) (overflow % 256));
-            }
-        } else if (!token.isEmpty()) {
-            var jidSepIndex = token.indexOf('@');
-            if (jidSepIndex <= 0) {
-                this.writeStringRaw(token);
-            } else {
-                this.writeJid(token.substring(0, jidSepIndex), token.substring(jidSepIndex + 1));
             }
         }
     }
@@ -178,16 +182,18 @@ public class WABinaryEncoder {
         var validAttributes = getValidKeys(jsonArray.get(1) == null || jsonArray.get(1).isJsonNull() ? new JsonObject() : jsonArray.get(1).getAsJsonObject());
 
         var optional = 0;
-        if (jsonArray.get(2) != null & !jsonArray.get(2).isJsonNull()) {
+        if (jsonArray.get(2) != null && !jsonArray.get(2).isJsonNull() && (!jsonArray.get(2).isJsonPrimitive() || (jsonArray.get(2).getAsJsonPrimitive().isString() && !jsonArray.get(2).getAsJsonPrimitive().getAsString().equals("[]")))) {
             optional = 1;
         }
         writeListStart(2 * validAttributes.size() + 1 + optional);
         writeString(jsonArray.get(0).getAsString(), false);
         writeAttributes(validAttributes);
-        writeChildren(jsonArray.get(2));
+        if (optional > 0)
+            writeChildren(jsonArray.get(2));
     }
 
     public byte[] write(JsonArray jsonArray) {
+        pushByte((short) 0);
         writeNode(jsonArray);
 
         return buffer.toByteArray();

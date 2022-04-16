@@ -1570,47 +1570,49 @@ public class WhatsAppClient extends WebSocketClient {
     public void onMessage(ByteBuffer bytes) {
         try {
             if (mdVersion) {
-                var result = noiseHandler.decodeFrame(bytes.array());
+                var results = noiseHandler.decodeFrame(bytes.array());
                 var awaiter = awaiterNexMessage.getAndSet(null);
-                if (awaiter != null) {
-                    awaiter.completeAsync(() -> result, executorService);
-                }
-
-                if (result instanceof NodeWhatsAppFrame nodeWhatsAppFrame) {
-                    var node = nodeWhatsAppFrame.getNode();
-
-                    var tag = node.get(0).getAsString();
-                    var attributes = node.get(1).getAsJsonObject();
-                    var data = node.get(2).getAsJsonArray();
-                    var firstDataTag = "";
-                    if (data.size() > 0) {
-                        var firstData = data.get(0).getAsJsonArray();
-                        firstDataTag = firstData.get(0).getAsString();
+                for (IWhatsAppFrame result : results) {
+                    if (awaiter != null) {
+                        awaiter.completeAsync(() -> result, executorService);
                     }
-                    switch (tag) {
-                        case "iq": {
-                            switch (firstDataTag) {
-                                case "pair-device": {
-                                    var response = new JSONArray()
-                                            .put("iq")
-                                            .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", attributes.get("id").getAsString()))
-                                            .put(new JsonArray());
-                                    sendNode(response);
-                                    break;
+
+                    if (result instanceof NodeWhatsAppFrame nodeWhatsAppFrame) {
+                        var node = nodeWhatsAppFrame.getNode();
+
+                        var tag = node.get(0).getAsString();
+                        var attributes = node.get(1).getAsJsonObject();
+                        var data = node.get(2).getAsJsonArray();
+                        var firstDataTag = "";
+                        if (data.size() > 0) {
+                            var firstData = data.get(0).getAsJsonArray();
+                            firstDataTag = firstData.get(0).getAsString();
+                        }
+                        switch (tag) {
+                            case "iq": {
+                                switch (firstDataTag) {
+                                    case "pair-device": {
+                                        var response = new JSONArray()
+                                                .put("iq")
+                                                .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", attributes.get("id").getAsString()))
+                                                .put(new JsonArray());
+                                        sendNode(response);
+                                        break;
+                                    }
+                                    default: {
+                                        logger.log(Level.WARNING, "Received unexpected iq tag : {" + firstDataTag + "} - with content: {" + data + "}");
+                                    }
                                 }
-                                default: {
-                                    logger.log(Level.WARNING, "Received unexpected iq tag : {" + firstDataTag + "} - with content: {" + data + "}");
-                                }
+                                break;
                             }
-                            break;
-                        }
-                        default: {
-                            logger.log(Level.WARNING, "Received unexpected tag type: {" + tag + "} - with content: {" + node + "}");
+                            default: {
+                                logger.log(Level.WARNING, "Received unexpected tag type: {" + tag + "} - with content: {" + node + "}");
+                            }
                         }
                     }
-                }
 
-                logger.log(Level.INFO, "Received Frame: " + result);
+                    logger.log(Level.INFO, "Received Frame: " + result);
+                }
             } else {
                 var byteArray = bytes.array();
                 int commaIndex = -1;

@@ -1,54 +1,39 @@
 package br.com.zapia.wpp.api.ws.binary;
 
+import it.auties.bytes.Bytes;
 
-/**
- * Copy from WhatsappWeb4j+
- */
+import java.util.LinkedList;
+import java.util.List;
+
 public class BinaryMessage {
-    /**
-     * The raw binary array used to construct this object
-     */
-    BinaryArray raw;
+    private final Bytes raw;
 
-    /**
-     * The raw binary array sliced at [3, {@code length})
-     */
-    BinaryArray decoded;
+    private final LinkedList<Bytes> decoded;
 
-    /**
-     * The length of the decoded message
-     */
-    int length;
+    public BinaryMessage(Bytes raw) {
+        this.raw = raw;
+        var decoded = new LinkedList<Bytes>();
+        while (raw.readableBytes() >= 3) {
+            var length = decodeLength(raw);
+            if (length < 0) {
+                continue;
+            }
 
-    /**
-     * Constructs a new instance of this wrapper from a binary array
-     *
-     * @param array the non-null binary array
-     */
-    public BinaryMessage(BinaryArray array) {
-        this.raw = array;
-        this.length = array.cut(3).toInt();
-        this.decoded = array.slice(3, length + 3);
+            decoded.add(raw.readBuffer(length));
+        }
+
+        this.decoded = decoded;
     }
 
-    /**
-     * Constructs a new instance of this wrapper from an array of bytes
-     *
-     * @param array the non-null array of bytes
-     */
+    private int decodeLength(Bytes buffer) {
+        return (buffer.readByte() << 16) | buffer.readUnsignedShort();
+    }
+
     public BinaryMessage(byte[] array) {
-        this(BinaryArray.of(array));
+        this(Bytes.of(array));
     }
 
-    public BinaryArray getRaw() {
-        return raw;
-    }
-
-    public BinaryArray getDecoded() {
+    public List<Bytes> getDecoded() {
         return decoded;
-    }
-
-    public int getLength() {
-        return length;
     }
 }

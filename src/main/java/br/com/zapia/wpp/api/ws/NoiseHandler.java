@@ -13,6 +13,7 @@ import br.com.zapia.wpp.api.ws.model.communication.NodeWhatsAppFrame;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.common.hash.Hashing;
 import com.google.protobuf.InvalidProtocolBufferException;
+import it.auties.bytes.Bytes;
 import org.whispersystems.curve25519.Curve25519KeyPair;
 
 import javax.crypto.BadPaddingException;
@@ -26,7 +27,9 @@ import java.nio.ByteBuffer;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 public class NoiseHandler {
 
@@ -111,36 +114,27 @@ public class NoiseHandler {
                 .readWrittenBytes();
     }
 
-    public IWhatsAppFrame decodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, IOException {
+    public List<IWhatsAppFrame> decodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, IOException {
         var message = new BinaryMessage(data);
+        var result = new ArrayList<IWhatsAppFrame>();
 
-        if (message.getLength() == 8913411) {
-            throw new IllegalStateException("Invalid message received");
-        }
-
-        if (isFinished) {
-            var bytes = BinaryBuffer.fromBytes(decrypt(message.getDecoded().data()));
-            if ((bytes.readUInt8() & 2) != 0) {
-                bytes = BinaryBuffer.fromBytes(Util.inflateBytes(bytes.remaining().readAllBytes()));
-            }
-            return new NodeWhatsAppFrame(new WABinaryDecoder(bytes.remaining().readAllBytes(), true).read());
-        } else {
-            return new BinaryWhatsAppFrame(message.getDecoded().data());
-        }
-        /*inBinary.writeBytes(data);
-        while (inBinary.canPeek()) {
-            inBinary.resetPosition();
-            var bytesLength = getBytesSize();
-            var bytes = inBinary.readBytes(bytesLength);
-            inBinary.markPosition();
+        for (Bytes bytes : message.getDecoded()) {
             if (isFinished) {
-                bytes = decrypt(bytes);
-                bytes = Util.inflateBytes(bytes);
-                onFrame.accept(new NodeWhatsAppFrame(new WABinaryDecoder(bytes).read()));
+                bytes = Bytes.of(decrypt(bytes.toByteArray()));
+                if ((bytes.readByte() & 2) != 0) {
+                    bytes = Bytes.of(Util.inflateBytes(bytes.remaining().toByteArray()));
+                }
+                try {
+                    result.add(new NodeWhatsAppFrame(new WABinaryDecoder(bytes.remaining().toByteArray(), true).read()));
+                } catch (Exception e) {
+                    throw e;
+                }
             } else {
-                onFrame.accept(new BinaryWhatsAppFrame(bytes));
+                result.add(new BinaryWhatsAppFrame(bytes.toByteArray()));
             }
-        }*/
+        }
+
+        return result;
     }
 
     public void authenticate(byte[] data) {

@@ -95,6 +95,11 @@
             <artifactId>jsoup</artifactId>
             <version>1.14.3</version>
         </dependency>
+        <dependency>
+            <groupId>com.github.auties00</groupId>
+            <artifactId>bytes</artifactId>
+            <version>1.2</version>
+        </dependency>
 
 
     </dependencies>
