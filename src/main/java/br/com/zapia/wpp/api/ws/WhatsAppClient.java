@@ -303,15 +303,15 @@ public class WhatsAppClient extends WebSocketClient {
             if (mdVersion) {
                 initMdEventListeners();
                 if (mdCreds == null) {
-                    var identityKey = Util.CURVE_25519.generateKeyPair();
+                    var signedIdentityKey = Util.CURVE_25519.generateKeyPair();
                     var noiseKeyPair = Util.CURVE_25519.generateKeyPair();
-                    var signedPreKey = Util.signedKeyPair(identityKey, 1);
+                    var signedPreKey = Util.signedKeyPair(signedIdentityKey, 1);
                     var registrationId = Util.getRandomBytes(2)[0] & 0x3fff;
                     var advSecretKey = Base64.getEncoder().encodeToString(Util.getRandomBytes(32));
                     var nextPreKeyId = 1;
                     var firstUnuploadedPreKeyId = 1;
                     var serverhasPreKeys = false;
-                    mdCreds = new MDCreds(noiseKeyPair, identityKey, signedPreKey, registrationId, advSecretKey, nextPreKeyId, firstUnuploadedPreKeyId, serverhasPreKeys);
+                    mdCreds = new MDCreds(noiseKeyPair, signedIdentityKey, signedPreKey, registrationId, advSecretKey, nextPreKeyId, firstUnuploadedPreKeyId, serverhasPreKeys);
                 }
                 ephemeralKeyPair = Util.CURVE_25519.generateKeyPair();
                 noiseHandler = new NoiseHandler(ephemeralKeyPair);
