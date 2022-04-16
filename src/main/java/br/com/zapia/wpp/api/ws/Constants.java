@@ -20,6 +20,10 @@ public class Constants {
     public static final String NOISE_MODE = "Noise_XX_25519_AESGCM_SHA256\0\0\0\0";
     public static final int KEEP_ALIVE_INTERVAL_MS = 20 * 1000;
     public static final int WA_DEFAULT_EPHEMERAL = 7 * 24 * 60 * 60;
+
+    public static final String DEF_CALLBACK_PREFIX = "CB:";
+
+    public static final String DEF_TAG_PREFIX = "TAG:";
     public static final Map<MessageType, String> HKDFInfoKeys = new HashMap<>() {{
         put(MessageType.IMAGE, "WhatsApp Image Keys");
         put(MessageType.AUDIO, "WhatsApp Audio Keys");

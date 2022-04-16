@@ -31,10 +31,7 @@ import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.whispersystems.curve25519.Curve25519KeyPair;
 
-import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
@@ -45,9 +42,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -82,6 +76,7 @@ public class WhatsAppClient extends WebSocketClient {
     private final AsyncLoadingCache<String, CheckIdIsOnWhatsAppResponse> cacheCheckIdExist;
     private final List<ScheduledFuture<?>> scheduledFutures;
     private final Map<String, CompletableFuture<JsonElement>> wsEvents;
+    private final Map<String, List<Consumer<NodeWhatsAppFrame>>> wsListeners;
     private final List<Runnable> runnableOnConnect;
     private boolean isSynced;
     private final boolean autoReconnect;
@@ -121,6 +116,7 @@ public class WhatsAppClient extends WebSocketClient {
         this.scheduledExecutorService = scheduledExecutorService;
         this.syncTag = new Object();
         this.wsEvents = new ConcurrentHashMap<>();
+        this.wsListeners = new ConcurrentHashMap<>();
         this.scheduledFutures = new ArrayList<>();
         this.collections = new HashMap<>();
         this.cacheCheckIdExist = Caffeine.newBuilder()
@@ -192,15 +188,18 @@ public class WhatsAppClient extends WebSocketClient {
         return response;
     }
 
-    public void sendNode(JSONArray jsonArray) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
+    public void sendNode(JSONArray jsonArray) {
         var node = new WABinaryEncoder(true).write(Util.GSON.fromJson(jsonArray.toString(), JsonArray.class));
         sendRawMessage(node);
     }
 
-    public void sendRawMessage(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
-        var bytes = noiseHandler.encodeFrame(data);
-        send(bytes);
-        logger.log(Level.INFO, "sendRawMessage");
+    public void sendRawMessage(byte[] data) {
+        try {
+            var bytes = noiseHandler.encodeFrame(data);
+            send(bytes);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "sendRawMessage", e);
+        }
     }
 
 
@@ -276,9 +275,20 @@ public class WhatsAppClient extends WebSocketClient {
         return null;
     }
 
+    private void initMdEventListeners() {
+        onWsListener("CB:iq,type:set,pair-device", nodeWhatsAppFrame -> {
+            var response = new JSONArray()
+                    .put("iq")
+                    .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()))
+                    .put(new JsonArray());
+            sendNode(response);
+        });
+    }
+
     private void initLogin() {
         try {
             if (mdVersion) {
+                initMdEventListeners();
                 if (mdCreds == null) {
                     var identityKey = Util.CURVE_25519.generateKeyPair();
                     var noiseKeyPair = Util.CURVE_25519.generateKeyPair();
@@ -1524,6 +1534,33 @@ public class WhatsAppClient extends WebSocketClient {
         }
     }
 
+    private boolean dispatchWsListener(String tag, NodeWhatsAppFrame frame) {
+        var triggered = false;
+        if (wsListeners.containsKey(tag)) {
+            triggered = true;
+            for (Consumer<NodeWhatsAppFrame> iWhatsAppFrameCallable : wsListeners.get(tag)) {
+                iWhatsAppFrameCallable.accept(frame);
+            }
+        }
+
+        return triggered;
+    }
+
+    private void onWsListener(String tag, Consumer<NodeWhatsAppFrame> consumer) {
+        if (!wsListeners.containsKey(tag)) {
+            wsListeners.put(tag, new ArrayList<>());
+        }
+
+        var consumerMock = new Consumer<NodeWhatsAppFrame>() {
+            @Override
+            public void accept(NodeWhatsAppFrame nodeWhatsAppFrame) {
+                executorService.submit(() -> consumer.accept(nodeWhatsAppFrame));
+            }
+        };
+
+        wsListeners.get(tag).add(consumerMock);
+    }
+
     public DriverState getDriverState() {
         return driverState;
     }
@@ -1562,6 +1599,7 @@ public class WhatsAppClient extends WebSocketClient {
     @Override
     public void onOpen(ServerHandshake handshakedata) {
         wsEvents.clear();
+        wsListeners.clear();
         collections.clear();
         executorService.submit(runnableFactory.apply(this::initLogin));
     }
@@ -1573,22 +1611,39 @@ public class WhatsAppClient extends WebSocketClient {
                 var results = noiseHandler.decodeFrame(bytes.array());
                 var awaiter = awaiterNexMessage.getAndSet(null);
                 for (IWhatsAppFrame result : results) {
+                    var triggered = false;
                     if (awaiter != null) {
+                        triggered = true;
                         awaiter.completeAsync(() -> result, executorService);
                     }
 
                     if (result instanceof NodeWhatsAppFrame nodeWhatsAppFrame) {
-                        var node = nodeWhatsAppFrame.getNode();
 
-                        var tag = node.get(0).getAsString();
-                        var attributes = node.get(1).getAsJsonObject();
-                        var data = node.get(2).getAsJsonArray();
-                        var firstDataTag = "";
-                        if (data.size() > 0) {
-                            var firstData = data.get(0).getAsJsonArray();
-                            firstDataTag = firstData.get(0).getAsString();
+                        var tag = nodeWhatsAppFrame.getTag();
+                        var attributes = nodeWhatsAppFrame.getAttrs();
+                        var data = nodeWhatsAppFrame.getData();
+
+                        var msgId = attributes.has("id") && attributes.get("id").isJsonPrimitive() ? attributes.get("id").getAsString() : "";
+                        var firstDataTag = data.size() > 0 && data.get(0).isJsonArray() ? data.get(0).getAsJsonArray().get(0).getAsString() : "";
+
+                        triggered = dispatchWsListener("%s%s".formatted(Constants.DEF_TAG_PREFIX, msgId), nodeWhatsAppFrame) || triggered;
+
+
+                        for (String keyObj : attributes.keySet()) {
+                            var value = attributes.get(keyObj).getAsString();
+                            triggered = dispatchWsListener("%s%s,%s:%s,%s".formatted(Constants.DEF_CALLBACK_PREFIX, tag, keyObj, value, firstDataTag), nodeWhatsAppFrame) || triggered;
+                            triggered = dispatchWsListener("%s%s,%s:%s".formatted(Constants.DEF_CALLBACK_PREFIX, tag, keyObj, value), nodeWhatsAppFrame) || triggered;
+                            triggered = dispatchWsListener("%s%s,%s".formatted(Constants.DEF_CALLBACK_PREFIX, tag, keyObj), nodeWhatsAppFrame) || triggered;
                         }
-                        switch (tag) {
+
+                        triggered = dispatchWsListener("%s%s,,%s".formatted(Constants.DEF_CALLBACK_PREFIX, tag, firstDataTag), nodeWhatsAppFrame) || triggered;
+                        triggered = dispatchWsListener("%s%s".formatted(Constants.DEF_CALLBACK_PREFIX, tag), nodeWhatsAppFrame) || triggered;
+
+                        if (!triggered) {
+                            logger.log(Level.WARNING, "Received unexpected message {msgId: %s, data: %s}".formatted(msgId, new Gson().toJson(nodeWhatsAppFrame.getNode())));
+                        }
+
+                        /*switch (tag) {
                             case "iq": {
                                 switch (firstDataTag) {
                                     case "pair-device": {
@@ -1606,12 +1661,10 @@ public class WhatsAppClient extends WebSocketClient {
                                 break;
                             }
                             default: {
-                                logger.log(Level.WARNING, "Received unexpected tag type: {" + tag + "} - with content: {" + node + "}");
+                                logger.log(Level.WARNING, "Received unexpected tag type: {" + tag + "} - with content: {" + nodeWhatsAppFrame.getNode() + "}");
                             }
-                        }
+                        }*/
                     }
-
-                    logger.log(Level.INFO, "Received Frame: " + result);
                 }
             } else {
                 var byteArray = bytes.array();

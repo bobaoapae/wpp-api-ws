@@ -1,18 +1,16 @@
 package br.com.zapia.wpp.api.ws.binary;
 
 import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
-import br.com.zapia.wpp.api.ws.utils.Util;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
+import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 public class WABinaryDecoder {
 
@@ -165,17 +163,17 @@ public class WABinaryDecoder {
         throw new IllegalArgumentException("invalid string with tag: " + tag);
     }
 
-    private Map<String, String> readAttributes(int number) {
-        var map = new HashMap<String, String>();
+    private JSONObject readAttributes(int number) {
+        var result = new JSONObject();
         if (number != 0) {
             for (int i = 0; i < number; i++) {
                 var key = readString(readByte());
                 var value = readString(readByte());
-                map.put(key, value);
+                result.put(key, value);
             }
         }
 
-        return map;
+        return result;
     }
 
     private JsonArray readList(int tag) throws InvalidProtocolBufferException {
@@ -264,7 +262,7 @@ public class WABinaryDecoder {
 
         var jsonArray = new JsonArray();
         jsonArray.add(descr);
-        jsonArray.add(JsonParser.parseString(Util.GSON.toJson(attrs)));
+        jsonArray.add(JsonParser.parseString(attrs.toString()));
         jsonArray.add(jsonElement);
 
         return jsonArray;
