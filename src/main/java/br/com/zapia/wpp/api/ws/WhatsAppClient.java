@@ -7,6 +7,7 @@ import br.com.zapia.wpp.api.ws.binary.WABinaryEncoder;
 import br.com.zapia.wpp.api.ws.binary.protos.*;
 import br.com.zapia.wpp.api.ws.model.*;
 import br.com.zapia.wpp.api.ws.model.communication.*;
+import br.com.zapia.wpp.api.ws.utils.SortedJSONObject;
 import br.com.zapia.wpp.api.ws.utils.Util;
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -280,7 +281,7 @@ public class WhatsAppClient extends WebSocketClient {
         onWsListener("CB:iq,type:set,pair-device", nodeWhatsAppFrame -> {
             var response = new JSONArray()
                     .put("iq")
-                    .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()))
+                    .put(new SortedJSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()))
                     .put(new JsonArray());
             sendNode(response);
 
@@ -780,11 +781,11 @@ public class WhatsAppClient extends WebSocketClient {
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
-                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                     .put(new JSONArray().put(
                             new JSONArray()
                                     .put("picture")
-                                    .put(new JSONObject().put("jid", Util.convertJidToSend(authInfo.getWid())).put("id", msgTag).put("type", "set"))
+                                    .put(new SortedJSONObject().put("jid", Util.convertJidToSend(authInfo.getWid())).put("id", msgTag).put("type", "set"))
                                     .put(
                                             new JSONArray()
                                                     .put(new JSONArray().put("image").put(JSONObject.NULL).put(Util.scaleImage(Base64.getDecoder().decode(base64Picture), 640, 640)))
@@ -815,7 +816,7 @@ public class WhatsAppClient extends WebSocketClient {
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
-                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                     .put(new JSONArray().put(
                             new JSONArray()
                                     .put("chat")
@@ -843,14 +844,14 @@ public class WhatsAppClient extends WebSocketClient {
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
-                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                     .put(new JSONArray().put(
                             new JSONArray()
                                     .put("chat")
-                                    .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("modify_tag", String.valueOf(tag)).put("type", "clear"))
+                                    .put(new SortedJSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("modify_tag", String.valueOf(tag)).put("type", "clear"))
                                     .put(
                                             new JSONArray()
-                                                    .put(new JSONArray().put("item").put(new JSONObject().put("owner", messageCollectionItem.isFromMe() ? "true" : "false").put("index", messageCollectionItem.getId())).put(JSONObject.NULL))
+                                                    .put(new JSONArray().put("item").put(new SortedJSONObject().put("owner", messageCollectionItem.isFromMe() ? "true" : "false").put("index", messageCollectionItem.getId())).put(JSONObject.NULL))
                                     )
                     ));
 
@@ -913,11 +914,11 @@ public class WhatsAppClient extends WebSocketClient {
         var actionQuery = new JSONArray();
         actionQuery
                 .put("action")
-                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                 .put(new JSONArray().put(
                         new JSONArray()
                                 .put("chat")
-                                .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("pin", pinTime))
+                                .put(new SortedJSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("pin", pinTime))
                                 .put(JSONObject.NULL)
                 ));
 
@@ -944,11 +945,11 @@ public class WhatsAppClient extends WebSocketClient {
         var actionQuery = new JSONArray();
         actionQuery
                 .put("action")
-                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                 .put(new JSONArray().put(
                         new JSONArray()
                                 .put("chat")
-                                .put(new JSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("previous", chatCollectionItem.getPin()))
+                                .put(new SortedJSONObject().put("jid", Util.convertJidToSend(chatCollectionItem.getId())).put("type", "pin").put("previous", chatCollectionItem.getPin()))
                                 .put(JSONObject.NULL)
                 ));
 
@@ -1007,7 +1008,7 @@ public class WhatsAppClient extends WebSocketClient {
             var actionQuery = new JSONArray();
             actionQuery
                     .put("action")
-                    .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
+                    .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "set"))
                     .put(new JSONArray().put(
                             new JSONArray()
                                     .put("read")
@@ -1039,7 +1040,7 @@ public class WhatsAppClient extends WebSocketClient {
         return msgs.thenApply(messageCollectionItems -> {
             var lastMsg = messageCollectionItems.get(messageCollectionItems.size() - 1);
 
-            var jsonObject = new JSONObject().put("index", lastMsg.getId()).put("owner", lastMsg.isFromMe() ? "true" : "false");
+            var jsonObject = new SortedJSONObject().put("index", lastMsg.getId()).put("owner", lastMsg.isFromMe() ? "true" : "false");
             if (Util.isGroupJid(chatCollectionItem.getId())) {
                 if (lastMsg.isFromMe()) {
                     jsonObject.put("participant", Util.convertJidToSend(authInfo.getWid()));
@@ -1478,7 +1479,7 @@ public class WhatsAppClient extends WebSocketClient {
         var actionQuery = new JSONArray();
         actionQuery
                 .put("action")
-                .put(new JSONObject().put("epoch", String.valueOf(msgCount)).put("type", "relay"))
+                .put(new SortedJSONObject().put("epoch", String.valueOf(msgCount)).put("type", "relay"))
                 .put(new JSONArray().put(
                         new JSONArray()
                                 .put("message")
@@ -1679,7 +1680,7 @@ public class WhatsAppClient extends WebSocketClient {
                                     case "pair-device": {
                                         var response = new JSONArray()
                                                 .put("iq")
-                                                .put(new JSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", attributes.get("id").getAsString()))
+                                                .put(new SortedJSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", attributes.get("id").getAsString()))
                                                 .put(new JsonArray());
                                         sendNode(response);
                                         break;

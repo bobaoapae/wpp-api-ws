@@ -1,6 +1,7 @@
 package br.com.zapia.wpp.api.ws.binary;
 
 import br.com.zapia.wpp.api.ws.binary.protos.WebMessageInfo;
+import br.com.zapia.wpp.api.ws.utils.SortedJSONObject;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
@@ -164,7 +165,7 @@ public class WABinaryDecoder {
     }
 
     private JSONObject readAttributes(int number) {
-        var result = new JSONObject();
+        var result = new SortedJSONObject();
         if (number != 0) {
             for (int i = 0; i < number; i++) {
                 var key = readString(readByte());

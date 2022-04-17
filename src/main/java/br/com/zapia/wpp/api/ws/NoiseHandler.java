@@ -96,7 +96,7 @@ public class NoiseHandler {
         return keyEnc;
     }
 
-    public byte[] encodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
+    public synchronized byte[] encodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException {
         if (isFinished)
             data = encrypt(data);
 
@@ -114,7 +114,7 @@ public class NoiseHandler {
                 .readWrittenBytes();
     }
 
-    public List<IWhatsAppFrame> decodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, IOException {
+    public synchronized List<IWhatsAppFrame> decodeFrame(byte[] data) throws InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, NoSuchAlgorithmException, BadPaddingException, InvalidKeyException, IOException {
         var message = new BinaryMessage(data);
         var result = new ArrayList<IWhatsAppFrame>();
 
@@ -137,7 +137,7 @@ public class NoiseHandler {
         return result;
     }
 
-    public void authenticate(byte[] data) {
+    public synchronized void authenticate(byte[] data) {
         if (!isFinished) {
             hash = Hashing.sha256().newHasher().putBytes(hash).putBytes(data).hash().asBytes();
         }
@@ -180,7 +180,7 @@ public class NoiseHandler {
                 .array();
     }
 
-    public void finishInit() {
+    public synchronized void finishInit() {
         var result = localHKDF(new byte[0]);
         encKey = result[0];
         decKey = result[1];

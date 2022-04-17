@@ -1,6 +1,7 @@
 package br.com.zapia.wpp.api.ws.binary;
 
 import br.com.zapia.wpp.api.ws.utils.Util;
+import com.google.common.base.Strings;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -48,15 +49,15 @@ public class WABinaryEncoder {
             throw new IllegalArgumentException("String too large to encode: " + length);
         }
 
-        if (length >= 1 << 20) {
-            pushByte((short) BinaryConstants.WA.Tags.BINARY_32.getNumVal());
-            pushInt((int) length, 4, false);
-        } else if (length >= 256) {
+        if (length < 256) {
+            pushByte((short) BinaryConstants.WA.Tags.BINARY_8.getNumVal());
+            pushByte((short) length);
+        } else if (length < 1048576) {
             pushByte((short) BinaryConstants.WA.Tags.BINARY_20.getNumVal());
             pushInt20((int) length);
         } else {
-            pushByte((short) BinaryConstants.WA.Tags.BINARY_8.getNumVal());
-            pushByte((short) length);
+            pushByte((short) BinaryConstants.WA.Tags.BINARY_32.getNumVal());
+            pushInt((int) length, 4, false);
         }
     }
 
@@ -69,7 +70,7 @@ public class WABinaryEncoder {
 
     private void writeJid(String left, String right) {
         pushByte((short) BinaryConstants.WA.Tags.JID_PAIR.getNumVal());
-        if (left != null && !left.isEmpty()) {
+        if (left != null) {
             writeString(left, false);
         } else {
             writeToken((short) BinaryConstants.WA.Tags.LIST_EMPTY.getNumVal());
@@ -86,41 +87,112 @@ public class WABinaryEncoder {
     }
 
     private void writeString(String token, boolean i) {
-        if (token == null) {
-            token = "";
+        if (Strings.isNullOrEmpty(token)) {
+            pushByte((short) BinaryConstants.WA.Tags.BINARY_8.getNumVal());
+            pushByte((short) BinaryConstants.WA.Tags.LIST_EMPTY.getNumVal());
+            return;
         }
 
 
         if (!i && token.equals("c.us")) {
-            writeToken((short) Arrays.stream(BinaryConstants.WA.SingleByteTokensMD).toList().indexOf("s.whatsapp.net"));
-            return;
+            token = "s.whatsapp.net";
         }
 
         var tokenIndex = Arrays.stream(isMd ? BinaryConstants.WA.SingleByteTokensMD : BinaryConstants.WA.SingleByteTokens).toList().indexOf(token);
 
-
-        if (tokenIndex == -1) {
-            var jidSepIndex = token.indexOf('@');
-            if (jidSepIndex < 0) {
-                this.writeStringRaw(token);
-            } else {
-                this.writeJid(token.substring(0, jidSepIndex), token.substring(jidSepIndex + 1));
-            }
-        } else {
-            if (isMd)
-                tokenIndex++;
-            if (tokenIndex < BinaryConstants.WA.Tags.SINGLE_BYTE_MAX.getNumVal()) {
-                writeToken((short) tokenIndex);
-            } else {
-                var overflow = tokenIndex - BinaryConstants.WA.Tags.SINGLE_BYTE_MAX.getNumVal();
-                var dictionaryIndex = overflow >> 8;
-                if (dictionaryIndex < 0 || dictionaryIndex > 3) {
-                    throw new IllegalArgumentException("double byte dict token out of range: " + token + ", " + tokenIndex);
-                }
-                writeToken((short) (BinaryConstants.WA.Tags.DICTIONARY_0.getNumVal() + dictionaryIndex));
-                writeToken((short) (overflow % 256));
-            }
+        if (tokenIndex != -1) {
+            tokenIndex++;
+            writeToken((short) tokenIndex);
+            return;
         }
+
+        var jidSepIndex = token.indexOf('@');
+        if (jidSepIndex >= 0) {
+            this.writeJid(token.substring(0, jidSepIndex), token.substring(jidSepIndex + 1));
+            return;
+        }
+
+        var doubleTokens = Arrays.asList(BinaryConstants.WA.DoubleByteTokens);
+
+        if (doubleTokens.contains(token)) {
+            var index = doubleTokens.indexOf(token);
+            var dictIndex = index / doubleTokens.size() / 4;
+            var dict = switch (dictIndex) {
+                case 0 -> BinaryConstants.WA.Tags.DICTIONARY_0;
+                case 1 -> BinaryConstants.WA.Tags.DICTIONARY_1;
+                case 2 -> BinaryConstants.WA.Tags.DICTIONARY_2;
+                case 3 -> BinaryConstants.WA.Tags.DICTIONARY_3;
+                default -> throw new IllegalArgumentException("Cannot find tag for quadrant %s".formatted(index));
+            };
+            pushByte((short) dict.getNumVal());
+            pushByte((short) (index % (doubleTokens.size() / 4)));
+            return;
+        }
+
+        var length = token.getBytes(StandardCharsets.UTF_8).length;
+
+        if (length < 128 && token.matches("^[A-F\\d]*$")) {
+            if (token.matches("\\d+")) {
+                writeString(token, BinaryConstants.WA.Tags.NIBBLE_8);
+            } else {
+                writeString(token, BinaryConstants.WA.Tags.HEX_8);
+            }
+            return;
+        }
+
+        writeStringRaw(token);
+    }
+
+    private void writeString(String input, BinaryConstants.WA.Tags token) {
+        pushByte((short) token.getNumVal());
+        writeStringLength(input);
+
+        for (int charCode = 0, index = 0; index < input.length(); index++) {
+            var stringCodePoint = Character.codePointAt(input, index);
+            var binaryCodePoint = getStringCodePoint(token, stringCodePoint);
+
+            if (index % 2 != 0) {
+                pushByte((short) (charCode |= binaryCodePoint));
+                continue;
+            }
+
+            charCode = binaryCodePoint << 4;
+            if (index != input.length() - 1) {
+                continue;
+            }
+
+            pushByte((short) (charCode |= 15));
+        }
+    }
+
+    private void writeStringLength(String input) {
+        var roundedLength = (int) Math.ceil(input.length() / 2F);
+        if (input.length() % 2 == 1) {
+            pushByte((short) (roundedLength | 128));
+            return;
+        }
+
+        pushByte((short) roundedLength);
+    }
+
+    private int getStringCodePoint(BinaryConstants.WA.Tags token, int codePoint) {
+        if (codePoint >= 48 && codePoint <= 57) {
+            return codePoint - 48;
+        }
+
+        if (token == BinaryConstants.WA.Tags.NIBBLE_8 && codePoint == 45) {
+            return 10;
+        }
+
+        if (token == BinaryConstants.WA.Tags.NIBBLE_8 && codePoint == 46) {
+            return 11;
+        }
+
+        if (token == BinaryConstants.WA.Tags.HEX_8 && codePoint >= 65 && codePoint <= 70) {
+            return codePoint - 55;
+        }
+
+        throw new IllegalArgumentException("Cannot parse codepoint %s with token %s".formatted(codePoint, token));
     }
 
     private void writeAttributes(JsonObject jsonObject) {
