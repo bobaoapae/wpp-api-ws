@@ -281,7 +281,7 @@ public class WhatsAppClient extends WebSocketClient {
         onWsListener("CB:iq,type:set,pair-device", nodeWhatsAppFrame -> {
             var response = new JSONArray()
                     .put("iq")
-                    .put(new SortedJSONObject().put("to", "@s.whatsapp.net").put("type", "result").put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()))
+                    .put(new SortedJSONObject().put("id", nodeWhatsAppFrame.getAttrs().get("id").getAsString()).put("to", "@s.whatsapp.net").put("type", "result"))
                     .put(new JsonArray());
             sendNode(response);
 
@@ -306,9 +306,9 @@ public class WhatsAppClient extends WebSocketClient {
                 if (mdCreds == null) {
                     var signedIdentityKey = Util.CURVE_25519.generateKeyPair();
                     var noiseKeyPair = Util.CURVE_25519.generateKeyPair();
+                    var registrationId = Util.registrationId();
                     var signedPreKey = Util.signedKeyPair(signedIdentityKey, 1);
-                    var registrationId = Util.getRandomBytes(2)[0] & 0x3fff;
-                    var advSecretKey = Base64.getEncoder().encodeToString(Util.getRandomBytes(32));
+                    var advSecretKey = Base64.getEncoder().encodeToString(Util.CURVE_25519.generateKeyPair().getPublicKey());
                     var nextPreKeyId = 1;
                     var firstUnuploadedPreKeyId = 1;
                     var serverhasPreKeys = false;
@@ -405,7 +405,8 @@ public class WhatsAppClient extends WebSocketClient {
 
         var companion = CompanionProps.newBuilder()
                 .setOs(Constants.WS_BROWSER_DESC[0])
-                .setVersion(AppVersion.newBuilder().setPrimary(10)).setPlatformType(CompanionProps.CompanionPropsPlatformType.CHROME)
+                .setVersion(AppVersion.newBuilder().setPrimary(4).setSecondary(0).setTertiary(0))
+                .setPlatformType(CompanionProps.CompanionPropsPlatformType.CHROME)
                 .setRequireFullSync(false);
 
         var companionRegData = CompanionRegData.newBuilder()
@@ -424,7 +425,7 @@ public class WhatsAppClient extends WebSocketClient {
                 .setReleaseChannel(UserAgent.UserAgentReleaseChannel.RELEASE)
                 .setMcc("000")
                 .setMnc("000")
-                .setDevice(Constants.WS_BROWSER_DESC[1])
+                .setDevice("Desktop")
                 .setOsVersion(Constants.WS_BROWSER_DESC[2])
                 .setManufacturer("")
                 .setOsBuildNumber("0.1")
@@ -513,7 +514,12 @@ public class WhatsAppClient extends WebSocketClient {
 
     private void generateMDQrCode(String ref) {
         try {
-            var stringQrCode = ref + "," + Base64.getEncoder().encodeToString(mdCreds.getNoiseKey().getPublicKey()) + "," + Base64.getEncoder().encodeToString(mdCreds.getSignedIdentityKey().getPublicKey()) + "," + mdCreds.getAdvSecretKey();
+            var stringQrCode = "%s,%s,%s,%s".formatted(
+                    ref,
+                    Base64.getEncoder().encodeToString(mdCreds.getNoiseKey().getPublicKey()),
+                    Base64.getEncoder().encodeToString(mdCreds.getSignedIdentityKey().getPublicKey()),
+                    mdCreds.getAdvSecretKey()
+            );
             var barcodeWriter = new QRCodeWriter();
             var bitMatrix = barcodeWriter.encode(stringQrCode, BarcodeFormat.QR_CODE, 400, 400);
             var outputStream = new ByteArrayOutputStream();

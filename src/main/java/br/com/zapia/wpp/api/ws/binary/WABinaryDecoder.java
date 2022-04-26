@@ -134,7 +134,7 @@ public class WABinaryDecoder {
     }
 
     private String readString(int tag) {
-        if (tag >= 3 && tag <= 235) {
+        if (tag >= (isMd ? 1 : 3) && tag <= (isMd ? BinaryConstants.WA.SingleByteTokensMD.size() : BinaryConstants.WA.SingleByteTokens.length)) {
             return getToken(tag);
         }
 
@@ -191,28 +191,28 @@ public class WABinaryDecoder {
     private String getToken(int index) {
         if (isMd)
             index--;
-        if ((!isMd && index < 3) || index > (isMd ? BinaryConstants.WA.SingleByteTokensMD.length : BinaryConstants.WA.SingleByteTokens.length)) {
+        if ((!isMd && index < 3) || index > (isMd ? BinaryConstants.WA.SingleByteTokensMD.size() : BinaryConstants.WA.SingleByteTokens.length)) {
             throw new IllegalArgumentException("Invalid token index: " + index);
         }
 
-        return isMd ? BinaryConstants.WA.SingleByteTokensMD[index] : BinaryConstants.WA.SingleByteTokens[index];
+        return isMd ? BinaryConstants.WA.SingleByteTokensMD.get(index) : BinaryConstants.WA.SingleByteTokens[index];
     }
 
     private String getTokenDouble(int index, int index2) {
         var n = 256 * index + index2;
 
-        if (n < 3 || n > BinaryConstants.WA.DoubleByteTokens.length) {
+        if (n < 3 || n > BinaryConstants.WA.DoubleByteTokens.size()) {
             throw new IllegalArgumentException("Invalid token index: " + index);
         }
 
-        return BinaryConstants.WA.DoubleByteTokens[n];
+        return BinaryConstants.WA.DoubleByteTokens.get(n);
     }
 
     private JsonArray readNode() throws InvalidProtocolBufferException {
         var listSize = readListSize(readByte());
         var descrTag = readByte();
         if (descrTag == BinaryConstants.WA.Tags.STREAM_END.getNumVal()) {
-            throw new IllegalStateException("Unexpected stream end");
+            return new JsonArray();
         }
 
         var descr = readString(descrTag);

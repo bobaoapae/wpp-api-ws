@@ -70,7 +70,7 @@ public class WABinaryEncoder {
 
     private void writeJid(String left, String right) {
         pushByte((short) BinaryConstants.WA.Tags.JID_PAIR.getNumVal());
-        if (left != null) {
+        if (!Strings.isNullOrEmpty(left)) {
             writeString(left, false);
         } else {
             writeToken((short) BinaryConstants.WA.Tags.LIST_EMPTY.getNumVal());
@@ -98,7 +98,7 @@ public class WABinaryEncoder {
             token = "s.whatsapp.net";
         }
 
-        var tokenIndex = Arrays.stream(isMd ? BinaryConstants.WA.SingleByteTokensMD : BinaryConstants.WA.SingleByteTokens).toList().indexOf(token);
+        var tokenIndex = (isMd ? BinaryConstants.WA.SingleByteTokensMD : Arrays.stream(BinaryConstants.WA.SingleByteTokens).toList()).indexOf(token);
 
         if (tokenIndex != -1) {
             tokenIndex++;
@@ -112,7 +112,7 @@ public class WABinaryEncoder {
             return;
         }
 
-        var doubleTokens = Arrays.asList(BinaryConstants.WA.DoubleByteTokens);
+        var doubleTokens = BinaryConstants.WA.DoubleByteTokens;
 
         if (doubleTokens.contains(token)) {
             var index = doubleTokens.indexOf(token);
